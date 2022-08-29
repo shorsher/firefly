@@ -19,19 +19,20 @@ package events
 import (
 	"context"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 type messageAndData struct {
-	message *fftypes.Message
-	data    fftypes.DataArray
+	message *core.Message
+	data    core.DataArray
 }
 
 // persistBatch performs very simple validation on each message/data element (hashes) and either persists
 // or discards them. Errors are returned only in the case of database failures, which should be retried.
-func (em *eventManager) persistBatch(ctx context.Context, batch *fftypes.Batch) (persistedBatch *fftypes.BatchPersisted, valid bool, err error) {
+func (em *eventManager) persistBatch(ctx context.Context, batch *core.Batch) (persistedBatch *core.BatchPersisted, valid bool, err error) {
 	l := log.L(ctx)
 
 	if batch.ID == nil || batch.Payload.TX.ID == nil || batch.Hash == nil {
@@ -45,8 +46,8 @@ func (em *eventManager) persistBatch(ctx context.Context, batch *fftypes.Batch) 
 	}
 
 	switch batch.Payload.TX.Type {
-	case fftypes.TransactionTypeBatchPin:
-	case fftypes.TransactionTypeUnpinned:
+	case core.TransactionTypeBatchPin:
+	case core.TransactionTypeUnpinned:
 	default:
 		l.Errorf("Invalid batch '%s'. Invalid transaction type: %s", batch.ID, batch.Payload.TX.Type)
 		return nil, false, nil // This is not retryable. skip this batch
@@ -87,10 +88,10 @@ func (em *eventManager) persistBatch(ctx context.Context, batch *fftypes.Batch) 
 	return persistedBatch, true, err
 }
 
-func (em *eventManager) validateAndPersistBatchContent(ctx context.Context, batch *fftypes.Batch) (valid bool, err error) {
+func (em *eventManager) validateAndPersistBatchContent(ctx context.Context, batch *core.Batch) (valid bool, err error) {
 
 	// Insert the data entries
-	dataByID := make(map[fftypes.UUID]*fftypes.Data)
+	dataByID := make(map[fftypes.UUID]*core.Data)
 	for i, data := range batch.Payload.Data {
 		if valid = em.validateBatchData(ctx, batch, i, data); !valid {
 			return false, nil
@@ -98,6 +99,7 @@ func (em *eventManager) validateAndPersistBatchContent(ctx context.Context, batc
 		if valid, err = em.checkAndInitiateBlobDownloads(ctx, batch, i, data); !valid || err != nil {
 			return false, err
 		}
+		data.Namespace = em.namespace.LocalName
 		dataByID[*data.ID] = data
 	}
 
@@ -106,6 +108,7 @@ func (em *eventManager) validateAndPersistBatchContent(ctx context.Context, batc
 		if valid = em.validateBatchMessage(ctx, batch, i, msg); !valid {
 			return false, nil
 		}
+		msg.LocalNamespace = em.namespace.LocalName
 	}
 
 	// We require that the batch contains exactly the set of data that is in the messages - no more or less.
@@ -114,7 +117,7 @@ func (em *eventManager) validateAndPersistBatchContent(ctx context.Context, batc
 	matchedData := make(map[fftypes.UUID]bool)
 	matchedMsgs := make([]*messageAndData, len(batch.Payload.Messages))
 	for iMsg, msg := range batch.Payload.Messages {
-		msgData := make(fftypes.DataArray, len(msg.Data))
+		msgData := make(core.DataArray, len(msg.Data))
 		for di, dataRef := range msg.Data {
 			msgData[di] = dataByID[*dataRef.ID]
 			if msgData[di] == nil || !msgData[di].Hash.Equals(dataRef.Hash) {
@@ -136,7 +139,7 @@ func (em *eventManager) validateAndPersistBatchContent(ctx context.Context, batc
 	return em.persistBatchContent(ctx, batch, matchedMsgs)
 }
 
-func (em *eventManager) validateBatchData(ctx context.Context, batch *fftypes.Batch, i int, data *fftypes.Data) bool {
+func (em *eventManager) validateBatchData(ctx context.Context, batch *core.Batch, i int, data *core.Data) bool {
 
 	l := log.L(ctx)
 	l.Tracef("Batch '%s' data %d: %+v", batch.ID, i, data)
@@ -159,9 +162,9 @@ func (em *eventManager) validateBatchData(ctx context.Context, batch *fftypes.Ba
 	return true
 }
 
-func (em *eventManager) checkAndInitiateBlobDownloads(ctx context.Context, batch *fftypes.Batch, i int, data *fftypes.Data) (bool, error) {
+func (em *eventManager) checkAndInitiateBlobDownloads(ctx context.Context, batch *core.Batch, i int, data *core.Data) (bool, error) {
 
-	if data.Blob != nil && batch.Type == fftypes.BatchTypeBroadcast {
+	if data.Blob != nil && batch.Type == core.BatchTypeBroadcast {
 		// Need to check if we need to initiate a download
 		blob, err := em.database.GetBlobMatchingHash(ctx, data.Blob.Hash)
 		if err != nil {
@@ -172,7 +175,7 @@ func (em *eventManager) checkAndInitiateBlobDownloads(ctx context.Context, batch
 				log.L(ctx).Errorf("Invalid data entry %d id=%s in batch '%s' - missing public blob reference", i, data.ID, batch.ID)
 				return false, nil
 			}
-			if err = em.sharedDownload.InitiateDownloadBlob(ctx, data.Namespace, batch.Payload.TX.ID, data.ID, data.Blob.Public); err != nil {
+			if err = em.sharedDownload.InitiateDownloadBlob(ctx, batch.Payload.TX.ID, data.ID, data.Blob.Public); err != nil {
 				return false, err
 			}
 		}
@@ -182,7 +185,7 @@ func (em *eventManager) checkAndInitiateBlobDownloads(ctx context.Context, batch
 	return true, nil
 }
 
-func (em *eventManager) validateBatchMessage(ctx context.Context, batch *fftypes.Batch, i int, msg *fftypes.Message) bool {
+func (em *eventManager) validateBatchMessage(ctx context.Context, batch *core.Batch, i int, msg *core.Message) bool {
 
 	l := log.L(ctx)
 	if msg == nil {
@@ -204,17 +207,17 @@ func (em *eventManager) validateBatchMessage(ctx context.Context, batch *fftypes
 		return false
 	}
 	// Set the state to pending, for the insertion stage
-	msg.State = fftypes.MessageStatePending
+	msg.State = core.MessageStatePending
 
 	return true
 }
 
-func (em *eventManager) sentByUs(ctx context.Context, batch *fftypes.Batch) bool {
-	localNode := em.ni.GetNodeUUID(ctx)
-	if batch.Node == nil {
+func (em *eventManager) sentByUs(ctx context.Context, batch *core.Batch) bool {
+	localNode, err := em.identity.GetLocalNode(ctx)
+	if localNode == nil || err != nil {
 		// This is from a node that hasn't yet completed registration, so we can't optimize
 		return false
-	} else if batch.Node.Equals(localNode) {
+	} else if batch.Node.Equals(localNode.ID) {
 		// We sent the batch, so we should already have all the messages and data locally
 		return true
 	}
@@ -222,7 +225,7 @@ func (em *eventManager) sentByUs(ctx context.Context, batch *fftypes.Batch) bool
 	return false
 }
 
-func (em *eventManager) verifyAlreadyStored(ctx context.Context, batch *fftypes.Batch) (valid bool, err error) {
+func (em *eventManager) verifyAlreadyStored(ctx context.Context, batch *core.Batch) (valid bool, err error) {
 	for _, msg := range batch.Payload.Messages {
 		msgLocal, _, _, err := em.data.GetMessageWithDataCached(ctx, msg.Header.ID)
 		if err != nil {
@@ -240,7 +243,7 @@ func (em *eventManager) verifyAlreadyStored(ctx context.Context, batch *fftypes.
 	return true, nil
 }
 
-func (em *eventManager) persistBatchContent(ctx context.Context, batch *fftypes.Batch, matchedMsgs []*messageAndData) (valid bool, err error) {
+func (em *eventManager) persistBatchContent(ctx context.Context, batch *core.Batch, matchedMsgs []*messageAndData) (valid bool, err error) {
 
 	// We want to insert the messages and data in the most efficient way we can.
 	// If we are sure we wrote the batch, then we do a cached lookup of each in turn - which is efficient

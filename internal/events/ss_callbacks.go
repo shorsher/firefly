@@ -20,17 +20,23 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/sharedstorage"
 )
 
-func (em *eventManager) SharedStorageBatchDownloaded(ss sharedstorage.Plugin, ns, payloadRef string, data []byte) (*fftypes.UUID, error) {
+func (em *eventManager) SharedStorageBatchDownloaded(ss sharedstorage.Plugin, payloadRef string, data []byte) (*fftypes.UUID, error) {
 
 	l := log.L(em.ctx)
 
+	if em.multiparty == nil {
+		l.Errorf("Ignoring batch from non-multiparty network!")
+		return nil, nil
+	}
+
 	// De-serialize the batch
-	var batch *fftypes.Batch
+	var batch *core.Batch
 	err := json.Unmarshal(data, &batch)
 	if err != nil {
 		l.Errorf("Invalid batch downloaded from %s '%s': %s", ss.Name(), payloadRef, err)
@@ -38,10 +44,11 @@ func (em *eventManager) SharedStorageBatchDownloaded(ss sharedstorage.Plugin, ns
 	}
 	l.Infof("Shared storage batch downloaded from %s '%s' id=%s (len=%d)", ss.Name(), payloadRef, batch.ID, len(data))
 
-	if batch.Namespace != ns {
-		l.Errorf("Invalid batch '%s'. Namespace in batch '%s' does not match pin namespace '%s'", batch.ID, batch.Namespace, ns)
+	if batch.Namespace != em.namespace.RemoteName {
+		log.L(em.ctx).Debugf("Ignoring shared storage batch from different namespace '%s'", batch.Namespace)
 		return nil, nil // This is not retryable. skip this batch
 	}
+	batch.Namespace = em.namespace.LocalName
 
 	err = em.retry.Do(em.ctx, "persist batch", func(attempt int) (bool, error) {
 		err := em.database.RunAsGroup(em.ctx, func(ctx context.Context) error {
@@ -69,7 +76,7 @@ func (em *eventManager) SharedStorageBlobDownloaded(ss sharedstorage.Plugin, has
 	// Dispatch to the blob receiver for efficient batch DB operations
 	blobHash := hash
 	em.blobReceiver.blobReceived(em.ctx, &blobNotification{
-		blob: &fftypes.Blob{
+		blob: &core.Blob{
 			PayloadRef: payloadRef,
 			Hash:       &blobHash,
 			Size:       size,

@@ -19,27 +19,30 @@ package apiserver
 import (
 	"net/http"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
+	"github.com/hyperledger/firefly/internal/orchestrator"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 )
 
-var getContractAPIs = &oapispec.Route{
-	Name:   "getContractAPIs",
-	Path:   "namespaces/{ns}/apis",
-	Method: http.MethodGet,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
+var getContractAPIs = &ffapi.Route{
+	Name:            "getContractAPIs",
+	Path:            "apis",
+	Method:          http.MethodGet,
+	PathParams:      nil,
 	QueryParams:     nil,
-	FilterFactory:   database.ContractAPIQueryFactory,
 	Description:     coremsgs.APIEndpointsGetContractAPIs,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return []*fftypes.ContractAPI{} },
+	JSONOutputValue: func() interface{} { return []*core.ContractAPI{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		return filterResult(getOr(r.Ctx).Contracts().GetContractAPIs(r.Ctx, r.APIBaseURL, r.PP["ns"], r.Filter))
+	Extensions: &coreExtensions{
+		EnabledIf: func(or orchestrator.Orchestrator) bool {
+			return or.Contracts() != nil
+		},
+		FilterFactory: database.ContractAPIQueryFactory,
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			return filterResult(cr.or.Contracts().GetContractAPIs(cr.ctx, cr.apiBaseURL, cr.filter))
+		},
 	},
 }

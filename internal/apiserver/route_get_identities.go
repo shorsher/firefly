@@ -20,32 +20,31 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 )
 
-var getIdentities = &oapispec.Route{
-	Name:   "getIdentities",
-	Path:   "namespaces/{ns}/identities",
-	Method: http.MethodGet,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
-	QueryParams: []*oapispec.QueryParam{
+var getIdentities = &ffapi.Route{
+	Name:       "getIdentities",
+	Path:       "identities",
+	Method:     http.MethodGet,
+	PathParams: nil,
+	QueryParams: []*ffapi.QueryParam{
 		{Name: "fetchverifiers", Example: "true", Description: coremsgs.APIParamsFetchVerifiers, IsBool: true},
 	},
-	FilterFactory:   database.IdentityQueryFactory,
 	Description:     coremsgs.APIEndpointsGetIdentities,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return &[]*fftypes.IdentityWithVerifiers{} },
+	JSONOutputValue: func() interface{} { return &[]*core.IdentityWithVerifiers{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		if strings.EqualFold(r.QP["fetchverifiers"], "true") {
-			return filterResult(getOr(r.Ctx).NetworkMap().GetIdentitiesWithVerifiers(r.Ctx, r.PP["ns"], r.Filter))
-		}
-		return filterResult(getOr(r.Ctx).NetworkMap().GetIdentities(r.Ctx, r.PP["ns"], r.Filter))
+	Extensions: &coreExtensions{
+		FilterFactory: database.IdentityQueryFactory,
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			if strings.EqualFold(r.QP["fetchverifiers"], "true") {
+				return filterResult(cr.or.NetworkMap().GetIdentitiesWithVerifiers(cr.ctx, cr.filter))
+			}
+			return filterResult(cr.or.NetworkMap().GetIdentities(cr.ctx, cr.filter))
+		},
 	},
 }

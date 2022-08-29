@@ -21,11 +21,12 @@ import (
 	"database/sql"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 var (
@@ -44,7 +45,7 @@ var (
 
 const transactionsTable = "transactions"
 
-func (s *SQLCommon) InsertTransaction(ctx context.Context, transaction *fftypes.Transaction) (err error) {
+func (s *SQLCommon) InsertTransaction(ctx context.Context, transaction *core.Transaction) (err error) {
 	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
 	if err != nil {
 		return err
@@ -63,7 +64,7 @@ func (s *SQLCommon) InsertTransaction(ctx context.Context, transaction *fftypes.
 				transaction.BlockchainIDs,
 			),
 		func() {
-			s.callbacks.UUIDCollectionNSEvent(database.CollectionTransactions, fftypes.ChangeEventTypeCreated, transaction.Namespace, transaction.ID)
+			s.callbacks.UUIDCollectionNSEvent(database.CollectionTransactions, core.ChangeEventTypeCreated, transaction.Namespace, transaction.ID)
 		},
 	); err != nil {
 		return err
@@ -72,8 +73,8 @@ func (s *SQLCommon) InsertTransaction(ctx context.Context, transaction *fftypes.
 	return s.commitTx(ctx, tx, autoCommit)
 }
 
-func (s *SQLCommon) transactionResult(ctx context.Context, row *sql.Rows) (*fftypes.Transaction, error) {
-	var transaction fftypes.Transaction
+func (s *SQLCommon) transactionResult(ctx context.Context, row *sql.Rows) (*core.Transaction, error) {
+	var transaction core.Transaction
 	err := row.Scan(
 		&transaction.ID,
 		&transaction.Type,
@@ -87,12 +88,12 @@ func (s *SQLCommon) transactionResult(ctx context.Context, row *sql.Rows) (*ffty
 	return &transaction, nil
 }
 
-func (s *SQLCommon) GetTransactionByID(ctx context.Context, id *fftypes.UUID) (message *fftypes.Transaction, err error) {
+func (s *SQLCommon) GetTransactionByID(ctx context.Context, namespace string, id *fftypes.UUID) (message *core.Transaction, err error) {
 
 	rows, _, err := s.query(ctx, transactionsTable,
 		sq.Select(transactionColumns...).
 			From(transactionsTable).
-			Where(sq.Eq{"id": id}),
+			Where(sq.Eq{"id": id, "namespace": namespace}),
 	)
 	if err != nil {
 		return nil, err
@@ -112,9 +113,9 @@ func (s *SQLCommon) GetTransactionByID(ctx context.Context, id *fftypes.UUID) (m
 	return transaction, nil
 }
 
-func (s *SQLCommon) GetTransactions(ctx context.Context, filter database.Filter) (message []*fftypes.Transaction, fr *database.FilterResult, err error) {
+func (s *SQLCommon) GetTransactions(ctx context.Context, namespace string, filter database.Filter) (message []*core.Transaction, fr *database.FilterResult, err error) {
 
-	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(transactionColumns...).From(transactionsTable), filter, transactionFilterFieldMap, []interface{}{"sequence"})
+	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(transactionColumns...).From(transactionsTable), filter, transactionFilterFieldMap, []interface{}{"sequence"}, sq.Eq{"namespace": namespace})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -125,7 +126,7 @@ func (s *SQLCommon) GetTransactions(ctx context.Context, filter database.Filter)
 	}
 	defer rows.Close()
 
-	transactions := []*fftypes.Transaction{}
+	transactions := []*core.Transaction{}
 	for rows.Next() {
 		transaction, err := s.transactionResult(ctx, rows)
 		if err != nil {
@@ -138,7 +139,7 @@ func (s *SQLCommon) GetTransactions(ctx context.Context, filter database.Filter)
 
 }
 
-func (s *SQLCommon) UpdateTransaction(ctx context.Context, id *fftypes.UUID, update database.Update) (err error) {
+func (s *SQLCommon) UpdateTransaction(ctx context.Context, namespace string, id *fftypes.UUID, update database.Update) (err error) {
 
 	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
 	if err != nil {
@@ -150,7 +151,7 @@ func (s *SQLCommon) UpdateTransaction(ctx context.Context, id *fftypes.UUID, upd
 	if err != nil {
 		return err
 	}
-	query = query.Where(sq.Eq{"id": id})
+	query = query.Where(sq.Eq{"id": id, "namespace": namespace})
 
 	_, err = s.updateTx(ctx, transactionsTable, tx, query, nil /* no change evnents for filter based updates */)
 	if err != nil {

@@ -23,24 +23,25 @@ import (
 	"testing"
 
 	"github.com/hyperledger/firefly/mocks/contractmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestPostContractAPIQuery(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mcm := &contractmocks.Manager{}
 	o.On("Contracts").Return(mcm)
-	input := fftypes.Datatype{}
+	input := core.Datatype{}
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(&input)
 	req := httptest.NewRequest("POST", "/api/v1/namespaces/ns1/apis/banana/query/peel", &buf)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mcm.On("InvokeContractAPI", mock.Anything, "ns1", "banana", "peel", mock.MatchedBy(func(req *fftypes.ContractCallRequest) bool {
-		return req.Type == fftypes.CallTypeQuery
+	mcm.On("InvokeContractAPI", mock.Anything, "banana", "peel", mock.MatchedBy(func(req *core.ContractCallRequest) bool {
+		return req.Type == core.CallTypeQuery
 	}), true).Return("banana", nil)
 	r.ServeHTTP(res, req)
 

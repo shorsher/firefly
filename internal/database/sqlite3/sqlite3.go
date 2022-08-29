@@ -27,8 +27,8 @@ import (
 	sq "github.com/Masterminds/squirrel"
 	migratedb "github.com/golang-migrate/migrate/v4/database"
 	migratesqlite3 "github.com/golang-migrate/migrate/v4/database/sqlite3"
+	"github.com/hyperledger/firefly-common/pkg/config"
 	"github.com/hyperledger/firefly/internal/database/sqlcommon"
-	"github.com/hyperledger/firefly/pkg/config"
 	"github.com/hyperledger/firefly/pkg/database"
 
 	// Import the derivation of SQLite3 CGO suported by golang-migrate
@@ -42,11 +42,14 @@ type SQLite3 struct {
 }
 
 func connHook(conn *sqlite3.SQLiteConn) error {
-	_, err := conn.Exec("PRAGMA case_sensitive_like=ON;", nil)
+	_, err := conn.Exec(`
+		PRAGMA case_sensitive_like=ON;
+		PRAGMA busy_timeout=1000;
+	`, nil)
 	return err
 }
 
-func (sqlite *SQLite3) Init(ctx context.Context, prefix config.Prefix, callbacks database.Callbacks) error {
+func (sqlite *SQLite3) Init(ctx context.Context, config config.Section) error {
 	capabilities := &database.Capabilities{}
 	if !ffSQLiteRegistered {
 		sql.Register("sqlite3_ff",
@@ -55,7 +58,11 @@ func (sqlite *SQLite3) Init(ctx context.Context, prefix config.Prefix, callbacks
 			})
 		ffSQLiteRegistered = true
 	}
-	return sqlite.SQLCommon.Init(ctx, sqlite, prefix, callbacks, capabilities)
+	return sqlite.SQLCommon.Init(ctx, sqlite, config, capabilities)
+}
+
+func (sqlite *SQLite3) SetHandler(namespace string, handler database.Callbacks) {
+	sqlite.SQLCommon.SetHandler(namespace, handler)
 }
 
 func (sqlite *SQLite3) Name() string {

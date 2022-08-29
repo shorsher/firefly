@@ -19,94 +19,91 @@ package assets
 import (
 	"context"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
 	"github.com/hyperledger/firefly/internal/broadcast"
-	"github.com/hyperledger/firefly/internal/coreconfig"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/data"
 	"github.com/hyperledger/firefly/internal/identity"
 	"github.com/hyperledger/firefly/internal/metrics"
 	"github.com/hyperledger/firefly/internal/operations"
 	"github.com/hyperledger/firefly/internal/privatemessaging"
 	"github.com/hyperledger/firefly/internal/syncasync"
-	"github.com/hyperledger/firefly/internal/sysmessaging"
 	"github.com/hyperledger/firefly/internal/txcommon"
-	"github.com/hyperledger/firefly/pkg/config"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
 	"github.com/hyperledger/firefly/pkg/tokens"
 )
 
 type Manager interface {
-	fftypes.Named
+	core.Named
 
-	CreateTokenPool(ctx context.Context, ns string, pool *fftypes.TokenPool, waitConfirm bool) (*fftypes.TokenPool, error)
-	ActivateTokenPool(ctx context.Context, pool *fftypes.TokenPool) error
-	GetTokenPools(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenPool, *database.FilterResult, error)
-	GetTokenPool(ctx context.Context, ns, connector, poolName string) (*fftypes.TokenPool, error)
-	GetTokenPoolByNameOrID(ctx context.Context, ns string, poolNameOrID string) (*fftypes.TokenPool, error)
+	CreateTokenPool(ctx context.Context, pool *core.TokenPool, waitConfirm bool) (*core.TokenPool, error)
+	ActivateTokenPool(ctx context.Context, pool *core.TokenPool) error
+	GetTokenPools(ctx context.Context, filter database.AndFilter) ([]*core.TokenPool, *database.FilterResult, error)
+	GetTokenPool(ctx context.Context, connector, poolName string) (*core.TokenPool, error)
+	GetTokenPoolByNameOrID(ctx context.Context, poolNameOrID string) (*core.TokenPool, error)
 
-	GetTokenBalances(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenBalance, *database.FilterResult, error)
-	GetTokenAccounts(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenAccount, *database.FilterResult, error)
-	GetTokenAccountPools(ctx context.Context, ns, key string, filter database.AndFilter) ([]*fftypes.TokenAccountPool, *database.FilterResult, error)
+	GetTokenBalances(ctx context.Context, filter database.AndFilter) ([]*core.TokenBalance, *database.FilterResult, error)
+	GetTokenAccounts(ctx context.Context, filter database.AndFilter) ([]*core.TokenAccount, *database.FilterResult, error)
+	GetTokenAccountPools(ctx context.Context, key string, filter database.AndFilter) ([]*core.TokenAccountPool, *database.FilterResult, error)
 
-	GetTokenTransfers(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenTransfer, *database.FilterResult, error)
-	GetTokenTransferByID(ctx context.Context, ns, id string) (*fftypes.TokenTransfer, error)
+	GetTokenTransfers(ctx context.Context, filter database.AndFilter) ([]*core.TokenTransfer, *database.FilterResult, error)
+	GetTokenTransferByID(ctx context.Context, id string) (*core.TokenTransfer, error)
 
-	NewTransfer(ns string, transfer *fftypes.TokenTransferInput) sysmessaging.MessageSender
-	MintTokens(ctx context.Context, ns string, transfer *fftypes.TokenTransferInput, waitConfirm bool) (*fftypes.TokenTransfer, error)
-	BurnTokens(ctx context.Context, ns string, transfer *fftypes.TokenTransferInput, waitConfirm bool) (*fftypes.TokenTransfer, error)
-	TransferTokens(ctx context.Context, ns string, transfer *fftypes.TokenTransferInput, waitConfirm bool) (*fftypes.TokenTransfer, error)
+	NewTransfer(transfer *core.TokenTransferInput) syncasync.Sender
+	MintTokens(ctx context.Context, transfer *core.TokenTransferInput, waitConfirm bool) (*core.TokenTransfer, error)
+	BurnTokens(ctx context.Context, transfer *core.TokenTransferInput, waitConfirm bool) (*core.TokenTransfer, error)
+	TransferTokens(ctx context.Context, transfer *core.TokenTransferInput, waitConfirm bool) (*core.TokenTransfer, error)
 
-	GetTokenConnectors(ctx context.Context, ns string) []*fftypes.TokenConnector
+	GetTokenConnectors(ctx context.Context) []*core.TokenConnector
 
-	NewApproval(ns string, approve *fftypes.TokenApprovalInput) sysmessaging.MessageSender
-	TokenApproval(ctx context.Context, ns string, approval *fftypes.TokenApprovalInput, waitConfirm bool) (*fftypes.TokenApproval, error)
-	GetTokenApprovals(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenApproval, *database.FilterResult, error)
+	NewApproval(approve *core.TokenApprovalInput) syncasync.Sender
+	TokenApproval(ctx context.Context, approval *core.TokenApprovalInput, waitConfirm bool) (*core.TokenApproval, error)
+	GetTokenApprovals(ctx context.Context, filter database.AndFilter) ([]*core.TokenApproval, *database.FilterResult, error)
 
 	// From operations.OperationHandler
-	PrepareOperation(ctx context.Context, op *fftypes.Operation) (*fftypes.PreparedOperation, error)
-	RunOperation(ctx context.Context, op *fftypes.PreparedOperation) (outputs fftypes.JSONObject, complete bool, err error)
+	PrepareOperation(ctx context.Context, op *core.Operation) (*core.PreparedOperation, error)
+	RunOperation(ctx context.Context, op *core.PreparedOperation) (outputs fftypes.JSONObject, complete bool, err error)
 }
 
 type assetManager struct {
 	ctx              context.Context
+	namespace        string
 	database         database.Plugin
 	txHelper         txcommon.Helper
 	identity         identity.Manager
-	data             data.Manager
 	syncasync        syncasync.Bridge
-	broadcast        broadcast.Manager
-	messaging        privatemessaging.Manager
+	broadcast        broadcast.Manager        // optional
+	messaging        privatemessaging.Manager // optional
 	tokens           map[string]tokens.Plugin
 	metrics          metrics.Manager
 	operations       operations.Manager
 	keyNormalization int
 }
 
-func NewAssetManager(ctx context.Context, di database.Plugin, im identity.Manager, dm data.Manager, sa syncasync.Bridge, bm broadcast.Manager, pm privatemessaging.Manager, ti map[string]tokens.Plugin, mm metrics.Manager, om operations.Manager, txHelper txcommon.Helper) (Manager, error) {
-	if di == nil || im == nil || sa == nil || bm == nil || pm == nil || ti == nil || mm == nil || om == nil {
-		return nil, i18n.NewError(ctx, coremsgs.MsgInitializationNilDepError)
+func NewAssetManager(ctx context.Context, ns, keyNormalization string, di database.Plugin, ti map[string]tokens.Plugin, im identity.Manager, sa syncasync.Bridge, bm broadcast.Manager, pm privatemessaging.Manager, mm metrics.Manager, om operations.Manager, txHelper txcommon.Helper) (Manager, error) {
+	if di == nil || im == nil || sa == nil || ti == nil || mm == nil || om == nil {
+		return nil, i18n.NewError(ctx, coremsgs.MsgInitializationNilDepError, "AssetManager")
 	}
 	am := &assetManager{
 		ctx:              ctx,
+		namespace:        ns,
 		database:         di,
 		txHelper:         txHelper,
 		identity:         im,
-		data:             dm,
 		syncasync:        sa,
 		broadcast:        bm,
 		messaging:        pm,
 		tokens:           ti,
-		keyNormalization: identity.ParseKeyNormalizationConfig(config.GetString(coreconfig.AssetManagerKeyNormalization)),
+		keyNormalization: identity.ParseKeyNormalizationConfig(keyNormalization),
 		metrics:          mm,
 		operations:       om,
 	}
-	om.RegisterHandler(ctx, am, []fftypes.OpType{
-		fftypes.OpTypeTokenCreatePool,
-		fftypes.OpTypeTokenActivatePool,
-		fftypes.OpTypeTokenTransfer,
-		fftypes.OpTypeTokenApproval,
+	om.RegisterHandler(ctx, am, []core.OpType{
+		core.OpTypeTokenCreatePool,
+		core.OpTypeTokenActivatePool,
+		core.OpTypeTokenTransfer,
+		core.OpTypeTokenApproval,
 	})
 	return am, nil
 }
@@ -124,28 +121,24 @@ func (am *assetManager) selectTokenPlugin(ctx context.Context, name string) (tok
 	return nil, i18n.NewError(ctx, coremsgs.MsgUnknownTokensPlugin, name)
 }
 
-func (am *assetManager) scopeNS(ns string, filter database.AndFilter) database.AndFilter {
-	return filter.Condition(filter.Builder().Eq("namespace", ns))
+func (am *assetManager) GetTokenBalances(ctx context.Context, filter database.AndFilter) ([]*core.TokenBalance, *database.FilterResult, error) {
+	return am.database.GetTokenBalances(ctx, am.namespace, filter)
 }
 
-func (am *assetManager) GetTokenBalances(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenBalance, *database.FilterResult, error) {
-	return am.database.GetTokenBalances(ctx, am.scopeNS(ns, filter))
+func (am *assetManager) GetTokenAccounts(ctx context.Context, filter database.AndFilter) ([]*core.TokenAccount, *database.FilterResult, error) {
+	return am.database.GetTokenAccounts(ctx, am.namespace, filter)
 }
 
-func (am *assetManager) GetTokenAccounts(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenAccount, *database.FilterResult, error) {
-	return am.database.GetTokenAccounts(ctx, am.scopeNS(ns, filter))
+func (am *assetManager) GetTokenAccountPools(ctx context.Context, key string, filter database.AndFilter) ([]*core.TokenAccountPool, *database.FilterResult, error) {
+	return am.database.GetTokenAccountPools(ctx, am.namespace, key, filter)
 }
 
-func (am *assetManager) GetTokenAccountPools(ctx context.Context, ns, key string, filter database.AndFilter) ([]*fftypes.TokenAccountPool, *database.FilterResult, error) {
-	return am.database.GetTokenAccountPools(ctx, key, am.scopeNS(ns, filter))
-}
-
-func (am *assetManager) GetTokenConnectors(ctx context.Context, ns string) []*fftypes.TokenConnector {
-	connectors := []*fftypes.TokenConnector{}
+func (am *assetManager) GetTokenConnectors(ctx context.Context) []*core.TokenConnector {
+	connectors := []*core.TokenConnector{}
 	for token := range am.tokens {
 		connectors = append(
 			connectors,
-			&fftypes.TokenConnector{
+			&core.TokenConnector{
 				Name: token,
 			},
 		)
@@ -153,18 +146,18 @@ func (am *assetManager) GetTokenConnectors(ctx context.Context, ns string) []*ff
 	return connectors
 }
 
-func (am *assetManager) getDefaultTokenConnector(ctx context.Context, ns string) (string, error) {
-	tokenConnectors := am.GetTokenConnectors(ctx, ns)
+func (am *assetManager) getDefaultTokenConnector(ctx context.Context) (string, error) {
+	tokenConnectors := am.GetTokenConnectors(ctx)
 	if len(tokenConnectors) != 1 {
 		return "", i18n.NewError(ctx, coremsgs.MsgFieldNotSpecified, "connector")
 	}
 	return tokenConnectors[0].Name, nil
 }
 
-func (am *assetManager) getDefaultTokenPool(ctx context.Context, ns string) (*fftypes.TokenPool, error) {
+func (am *assetManager) getDefaultTokenPool(ctx context.Context) (*core.TokenPool, error) {
 	f := database.TokenPoolQueryFactory.NewFilter(ctx).And()
 	f.Limit(1).Count(true)
-	tokenPools, fr, err := am.GetTokenPools(ctx, ns, f)
+	tokenPools, fr, err := am.GetTokenPools(ctx, f)
 	if err != nil {
 		return nil, err
 	}

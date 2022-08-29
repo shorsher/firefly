@@ -23,12 +23,13 @@ import (
 
 	sq "github.com/Masterminds/squirrel"
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/pkg/config"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 	"github.com/sirupsen/logrus"
 
 	// Import migrate file source
@@ -38,23 +39,62 @@ import (
 type SQLCommon struct {
 	db           *sql.DB
 	capabilities *database.Capabilities
-	callbacks    database.Callbacks
+	callbacks    callbacks
 	provider     Provider
 	features     SQLFeatures
+}
+
+type callbacks struct {
+	handlers map[string]database.Callbacks
+}
+
+func (cb *callbacks) OrderedUUIDCollectionNSEvent(resType database.OrderedUUIDCollectionNS, eventType core.ChangeEventType, ns string, id *fftypes.UUID, sequence int64) {
+	if cb, ok := cb.handlers[ns]; ok {
+		cb.OrderedUUIDCollectionNSEvent(resType, eventType, ns, id, sequence)
+	}
+	if cb, ok := cb.handlers[database.GlobalHandler]; ok {
+		cb.OrderedUUIDCollectionNSEvent(resType, eventType, ns, id, sequence)
+	}
+}
+
+func (cb *callbacks) OrderedCollectionNSEvent(resType database.OrderedCollectionNS, eventType core.ChangeEventType, ns string, sequence int64) {
+	if cb, ok := cb.handlers[ns]; ok {
+		cb.OrderedCollectionNSEvent(resType, eventType, ns, sequence)
+	}
+	if cb, ok := cb.handlers[database.GlobalHandler]; ok {
+		cb.OrderedCollectionNSEvent(resType, eventType, ns, sequence)
+	}
+}
+
+func (cb *callbacks) UUIDCollectionNSEvent(resType database.UUIDCollectionNS, eventType core.ChangeEventType, ns string, id *fftypes.UUID) {
+	if cb, ok := cb.handlers[ns]; ok {
+		cb.UUIDCollectionNSEvent(resType, eventType, ns, id)
+	}
+	if cb, ok := cb.handlers[database.GlobalHandler]; ok {
+		cb.UUIDCollectionNSEvent(resType, eventType, ns, id)
+	}
+}
+
+func (cb *callbacks) HashCollectionNSEvent(resType database.HashCollectionNS, eventType core.ChangeEventType, ns string, hash *fftypes.Bytes32) {
+	if cb, ok := cb.handlers[ns]; ok {
+		cb.HashCollectionNSEvent(resType, eventType, ns, hash)
+	}
+	if cb, ok := cb.handlers[database.GlobalHandler]; ok {
+		cb.HashCollectionNSEvent(resType, eventType, ns, hash)
+	}
 }
 
 type txContextKey struct{}
 
 type txWrapper struct {
 	sqlTX           *sql.Tx
-	preCommitEvents []*fftypes.Event
+	preCommitEvents []*core.Event
 	postCommit      []func()
 	tableLocks      []string
 }
 
-func (s *SQLCommon) Init(ctx context.Context, provider Provider, prefix config.Prefix, callbacks database.Callbacks, capabilities *database.Capabilities) (err error) {
+func (s *SQLCommon) Init(ctx context.Context, provider Provider, config config.Section, capabilities *database.Capabilities) (err error) {
 	s.capabilities = capabilities
-	s.callbacks = callbacks
 	s.provider = provider
 	if s.provider != nil {
 		s.features = s.provider.Features()
@@ -64,32 +104,43 @@ func (s *SQLCommon) Init(ctx context.Context, provider Provider, prefix config.P
 		return i18n.NewError(ctx, coremsgs.MsgDBInitFailed)
 	}
 
-	if s.db, err = provider.Open(prefix.GetString(SQLConfDatasourceURL)); err != nil {
+	if config.GetString(SQLConfDatasourceURL) == "" {
+		return i18n.NewError(ctx, coremsgs.MsgMissingPluginConfig, "url", fmt.Sprintf("database.%s", s.provider.Name()))
+	}
+
+	if s.db, err = provider.Open(config.GetString(SQLConfDatasourceURL)); err != nil {
 		return i18n.WrapError(ctx, err, coremsgs.MsgDBInitFailed)
 	}
-	connLimit := prefix.GetInt(SQLConfMaxConnections)
+	connLimit := config.GetInt(SQLConfMaxConnections)
 	if connLimit > 0 {
 		s.db.SetMaxOpenConns(connLimit)
-		s.db.SetConnMaxIdleTime(prefix.GetDuration(SQLConfMaxConnIdleTime))
-		maxIdleConns := prefix.GetInt(SQLConfMaxIdleConns)
+		s.db.SetConnMaxIdleTime(config.GetDuration(SQLConfMaxConnIdleTime))
+		maxIdleConns := config.GetInt(SQLConfMaxIdleConns)
 		if maxIdleConns <= 0 {
 			// By default we rely on the idle time, rather than a maximum number of conns to leave open
 			maxIdleConns = connLimit
 		}
 		s.db.SetMaxIdleConns(maxIdleConns)
-		s.db.SetConnMaxLifetime(prefix.GetDuration(SQLConfMaxConnLifetime))
+		s.db.SetConnMaxLifetime(config.GetDuration(SQLConfMaxConnLifetime))
 	}
 	if connLimit > 1 {
 		capabilities.Concurrency = true
 	}
 
-	if prefix.GetBool(SQLConfMigrationsAuto) {
-		if err = s.applyDBMigrations(ctx, prefix, provider); err != nil {
+	if config.GetBool(SQLConfMigrationsAuto) {
+		if err = s.applyDBMigrations(ctx, config, provider); err != nil {
 			return i18n.WrapError(ctx, err, coremsgs.MsgDBMigrationFailed)
 		}
 	}
 
 	return nil
+}
+
+func (s *SQLCommon) SetHandler(namespace string, handler database.Callbacks) {
+	if s.callbacks.handlers == nil {
+		s.callbacks.handlers = make(map[string]database.Callbacks)
+	}
+	s.callbacks.handlers[namespace] = handler
 }
 
 func (s *SQLCommon) Capabilities() *database.Capabilities { return s.capabilities }
@@ -113,12 +164,12 @@ func (s *SQLCommon) RunAsGroup(ctx context.Context, fn func(ctx context.Context)
 	return s.commitTx(ctx, tx, false /* we _are_ the auto-committer */)
 }
 
-func (s *SQLCommon) applyDBMigrations(ctx context.Context, prefix config.Prefix, provider Provider) error {
+func (s *SQLCommon) applyDBMigrations(ctx context.Context, config config.Section, provider Provider) error {
 	driver, err := provider.GetMigrationDriver(s.db)
 	if err == nil {
 		var m *migrate.Migrate
 		m, err = migrate.NewWithDatabaseInstance(
-			"file://"+prefix.GetString(SQLConfMigrationsDirectory),
+			"file://"+config.GetString(SQLConfMigrationsDirectory),
 			provider.MigrationsDir(), driver)
 		if err == nil {
 			err = m.Up()
@@ -358,7 +409,7 @@ func (s *SQLCommon) postCommitEvent(tx *txWrapper, fn func()) {
 	tx.postCommit = append(tx.postCommit, fn)
 }
 
-func (s *SQLCommon) addPreCommitEvent(tx *txWrapper, event *fftypes.Event) {
+func (s *SQLCommon) addPreCommitEvent(tx *txWrapper, event *core.Event) {
 	tx.preCommitEvents = append(tx.preCommitEvents, event)
 }
 

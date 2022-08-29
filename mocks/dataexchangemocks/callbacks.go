@@ -12,7 +12,7 @@ type Callbacks struct {
 	mock.Mock
 }
 
-// DXEvent provides a mock function with given fields: event
-func (_m *Callbacks) DXEvent(event dataexchange.DXEvent) {
-	_m.Called(event)
+// DXEvent provides a mock function with given fields: plugin, event
+func (_m *Callbacks) DXEvent(plugin dataexchange.Plugin, event dataexchange.DXEvent) {
+	_m.Called(plugin, event)
 }

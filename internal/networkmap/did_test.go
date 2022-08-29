@@ -20,9 +20,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/mocks/databasemocks"
 	"github.com/hyperledger/firefly/mocks/identitymanagermocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -33,53 +34,53 @@ func TestDIDGenerationOK(t *testing.T) {
 
 	org1 := testOrg("org1")
 
-	verifierEth := (&fftypes.Verifier{
+	verifierEth := (&core.Verifier{
 		Identity:  org1.ID,
 		Namespace: org1.Namespace,
-		VerifierRef: fftypes.VerifierRef{
-			Type:  fftypes.VerifierTypeEthAddress,
+		VerifierRef: core.VerifierRef{
+			Type:  core.VerifierTypeEthAddress,
 			Value: "0xc90d94dE1021fD17fAA2F1FC4F4D36Dff176120d",
 		},
 		Created: fftypes.Now(),
 	}).Seal()
-	verifierMSP := (&fftypes.Verifier{
+	verifierMSP := (&core.Verifier{
 		Identity:  org1.ID,
 		Namespace: org1.Namespace,
-		VerifierRef: fftypes.VerifierRef{
-			Type:  fftypes.VerifierTypeMSPIdentity,
+		VerifierRef: core.VerifierRef{
+			Type:  core.VerifierTypeMSPIdentity,
 			Value: "mspIdForAcme::x509::CN=fabric-ca::CN=user1",
 		},
 		Created: fftypes.Now(),
 	}).Seal()
-	verifierDX := (&fftypes.Verifier{
+	verifierDX := (&core.Verifier{
 		Identity:  org1.ID,
 		Namespace: org1.Namespace,
-		VerifierRef: fftypes.VerifierRef{
-			Type:  fftypes.VerifierTypeFFDXPeerID,
+		VerifierRef: core.VerifierRef{
+			Type:  core.VerifierTypeFFDXPeerID,
 			Value: "peer1",
 		},
 		Created: fftypes.Now(),
 	}).Seal()
-	verifierUnknown := (&fftypes.Verifier{
+	verifierUnknown := (&core.Verifier{
 		Identity:  org1.ID,
 		Namespace: org1.Namespace,
-		VerifierRef: fftypes.VerifierRef{
-			Type:  fftypes.VerifierType("unknown"),
+		VerifierRef: core.VerifierRef{
+			Type:  core.VerifierType("unknown"),
 			Value: "ignore me",
 		},
 		Created: fftypes.Now(),
 	}).Seal()
 
 	mdi := nm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", nm.ctx, mock.Anything).Return(org1, nil)
-	mdi.On("GetVerifiers", nm.ctx, mock.Anything).Return([]*fftypes.Verifier{
+	mdi.On("GetIdentityByID", nm.ctx, "ns1", mock.Anything).Return(org1, nil)
+	mdi.On("GetVerifiers", nm.ctx, "ns1", mock.Anything).Return([]*core.Verifier{
 		verifierEth,
 		verifierMSP,
 		verifierDX,
 		verifierUnknown,
 	}, nil, nil)
 
-	doc, err := nm.GetDIDDocForIndentityByID(nm.ctx, org1.Namespace, org1.ID.String())
+	doc, err := nm.GetDIDDocForIndentityByID(nm.ctx, org1.ID.String())
 	assert.NoError(t, err)
 	assert.Equal(t, &DIDDocument{
 		Context: []string{
@@ -124,10 +125,10 @@ func TestDIDGenerationGetVerifiersFail(t *testing.T) {
 	org1 := testOrg("org1")
 
 	mdi := nm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", nm.ctx, mock.Anything).Return(org1, nil)
-	mdi.On("GetVerifiers", nm.ctx, mock.Anything).Return(nil, nil, fmt.Errorf("pop"))
+	mdi.On("GetIdentityByID", nm.ctx, "ns1", mock.Anything).Return(org1, nil)
+	mdi.On("GetVerifiers", nm.ctx, "ns1", mock.Anything).Return(nil, nil, fmt.Errorf("pop"))
 
-	_, err := nm.GetDIDDocForIndentityByID(nm.ctx, org1.Namespace, org1.ID.String())
+	_, err := nm.GetDIDDocForIndentityByID(nm.ctx, org1.ID.String())
 	assert.Regexp(t, "pop", err)
 }
 
@@ -138,9 +139,9 @@ func TestDIDGenerationGetIdentityFail(t *testing.T) {
 	org1 := testOrg("org1")
 
 	mdi := nm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", nm.ctx, mock.Anything).Return(nil, fmt.Errorf("pop"))
+	mdi.On("GetIdentityByID", nm.ctx, "ns1", mock.Anything).Return(nil, fmt.Errorf("pop"))
 
-	_, err := nm.GetDIDDocForIndentityByID(nm.ctx, org1.Namespace, org1.ID.String())
+	_, err := nm.GetDIDDocForIndentityByID(nm.ctx, org1.ID.String())
 	assert.Regexp(t, "pop", err)
 }
 
@@ -164,13 +165,13 @@ func TestDIDGenerationGetIdentityByDIDFailVerifiers(t *testing.T) {
 	org1 := testOrg("org1")
 
 	mii := nm.identity.(*identitymanagermocks.Manager)
-	mii.On("CachedIdentityLookupMustExist", nm.ctx, mock.Anything).Return(&fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	mii.On("CachedIdentityLookupMustExist", nm.ctx, mock.Anything).Return(&core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
 	}, false, nil)
 	mdi := nm.database.(*databasemocks.Plugin)
-	mdi.On("GetVerifiers", nm.ctx, mock.Anything).Return(nil, nil, fmt.Errorf("pop"))
+	mdi.On("GetVerifiers", nm.ctx, "ns1", mock.Anything).Return(nil, nil, fmt.Errorf("pop"))
 
 	_, err := nm.GetDIDDocForIndentityByDID(nm.ctx, org1.DID)
 	assert.Regexp(t, "pop", err)

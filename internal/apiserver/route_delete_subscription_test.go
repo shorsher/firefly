@@ -23,14 +23,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestDeleteSubscription(t *testing.T) {
 	o, r := newTestAPIServer()
-	input := fftypes.Subscription{}
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
+	input := core.Subscription{}
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(&input)
 	u := fftypes.NewUUID()
@@ -38,7 +40,7 @@ func TestDeleteSubscription(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	o.On("DeleteSubscription", mock.Anything, "ns1", u.String()).
+	o.On("DeleteSubscription", mock.Anything, u.String()).
 		Return(nil)
 	r.ServeHTTP(res, req)
 

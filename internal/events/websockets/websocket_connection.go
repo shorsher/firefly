@@ -24,10 +24,11 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
 type websocketStartedSub struct {
@@ -47,14 +48,16 @@ type websocketConnection struct {
 	receiverDone chan struct{}
 	autoAck      bool
 	started      []*websocketStartedSub
-	inflight     []*fftypes.EventDeliveryResponse
+	inflight     []*core.EventDeliveryResponse
 	mux          sync.Mutex
 	closed       bool
 	remoteAddr   string
 	userAgent    string
+	header       http.Header
+	auth         core.Authorizer
 }
 
-func newConnection(pCtx context.Context, ws *WebSockets, wsConn *websocket.Conn, req *http.Request) *websocketConnection {
+func newConnection(pCtx context.Context, ws *WebSockets, wsConn *websocket.Conn, req *http.Request, auth core.Authorizer) *websocketConnection {
 	connID := fftypes.NewUUID().String()
 	ctx := log.WithLogField(pCtx, "websocket", connID)
 	ctx, cancelCtx := context.WithCancel(ctx)
@@ -69,6 +72,8 @@ func newConnection(pCtx context.Context, ws *WebSockets, wsConn *websocket.Conn,
 		receiverDone: make(chan struct{}),
 		remoteAddr:   req.RemoteAddr,
 		userAgent:    req.UserAgent(),
+		header:       req.Header,
+		auth:         auth,
 	}
 	go wc.sendLoop()
 	go wc.receiveLoop()
@@ -84,8 +89,8 @@ func (wc *websocketConnection) processAutoStart(req *http.Request) {
 	autoAck, hasAutoack := req.URL.Query()["autoack"]
 	isAutoack := hasAutoack && (len(autoAck) == 0 || autoAck[0] != "false")
 	if hasEphemeral || hasName {
-		filter := fftypes.NewSubscriptionFilterFromQuery(query)
-		err := wc.handleStart(&fftypes.WSClientActionStartPayload{
+		filter := core.NewSubscriptionFilterFromQuery(query)
+		err := wc.handleStart(&core.WSStart{
 			AutoAck:   &isAutoack,
 			Ephemeral: isEphemeral,
 			Namespace: query.Get("namespace"),
@@ -130,7 +135,7 @@ func (wc *websocketConnection) receiveLoop() {
 	defer close(wc.receiverDone)
 	for {
 		var msgData []byte
-		var msgHeader fftypes.WSClientActionBase
+		var msgHeader core.WSActionBase
 		_, reader, err := wc.wsConn.NextReader()
 		if err == nil {
 			msgData, err = ioutil.ReadAll(reader)
@@ -148,16 +153,22 @@ func (wc *websocketConnection) receiveLoop() {
 		}
 		l.Tracef("Received: %s", string(msgData))
 		switch msgHeader.Type {
-		case fftypes.WSClientActionStart:
-			var msg fftypes.WSClientActionStartPayload
+		case core.WSClientActionStart:
+			var msg core.WSStart
 			err = json.Unmarshal(msgData, &msg)
 			if err == nil {
-				err = wc.handleStart(&msg)
+				err = wc.authorizeMessage(msg.Namespace)
+				if err == nil {
+					err = wc.handleStart(&msg)
+				}
 			}
-		case fftypes.WSClientActionAck:
-			var msg fftypes.WSClientActionAckPayload
+		case core.WSClientActionAck:
+			var msg core.WSAck
 			err = json.Unmarshal(msgData, &msg)
 			if err == nil {
+				// acks are not authenticated because they will only be accepted for
+				// messages that were sent by FireFly on this connection, which would
+				// have previously checked authorization in the start message
 				err = wc.handleAck(&msg)
 			}
 		default:
@@ -171,8 +182,8 @@ func (wc *websocketConnection) receiveLoop() {
 	}
 }
 
-func (wc *websocketConnection) dispatch(event *fftypes.EventDelivery) error {
-	inflight := &fftypes.EventDeliveryResponse{
+func (wc *websocketConnection) dispatch(event *core.EventDelivery) error {
+	inflight := &core.EventDeliveryResponse{
 		ID:           event.ID,
 		Subscription: event.Subscription,
 	}
@@ -199,8 +210,8 @@ func (wc *websocketConnection) dispatch(event *fftypes.EventDelivery) error {
 
 func (wc *websocketConnection) protocolError(err error) {
 	log.L(wc.ctx).Errorf("Sending protocol error to client: %s", err)
-	sendErr := wc.send(&fftypes.WSProtocolErrorPayload{
-		Type:  fftypes.WSProtocolErrorEventType,
+	sendErr := wc.send(&core.WSError{
+		Type:  core.WSProtocolErrorEventType,
 		Error: err.Error(),
 	})
 	if sendErr != nil {
@@ -220,7 +231,7 @@ func (wc *websocketConnection) send(msg interface{}) error {
 	}
 }
 
-func (wc *websocketConnection) handleStart(start *fftypes.WSClientActionStartPayload) (err error) {
+func (wc *websocketConnection) handleStart(start *core.WSStart) (err error) {
 	wc.mux.Lock()
 	if start.AutoAck != nil {
 		if *start.AutoAck != wc.autoAck && len(wc.started) > 0 {
@@ -238,7 +249,7 @@ func (wc *websocketConnection) handleStart(start *fftypes.WSClientActionStartPay
 	return wc.ws.start(wc, start)
 }
 
-func (wc *websocketConnection) durableSubMatcher(sr fftypes.SubscriptionRef) bool {
+func (wc *websocketConnection) durableSubMatcher(sr core.SubscriptionRef) bool {
 	wc.mux.Lock()
 	defer wc.mux.Unlock()
 	for _, startedSub := range wc.started {
@@ -249,9 +260,9 @@ func (wc *websocketConnection) durableSubMatcher(sr fftypes.SubscriptionRef) boo
 	return false
 }
 
-func (wc *websocketConnection) checkAck(ack *fftypes.WSClientActionAckPayload) (*fftypes.EventDeliveryResponse, error) {
+func (wc *websocketConnection) checkAck(ack *core.WSAck) (*core.EventDeliveryResponse, error) {
 	l := log.L(wc.ctx)
-	var inflight *fftypes.EventDeliveryResponse
+	var inflight *core.EventDeliveryResponse
 	wc.mux.Lock()
 	defer wc.mux.Unlock()
 
@@ -260,7 +271,7 @@ func (wc *websocketConnection) checkAck(ack *fftypes.WSClientActionAckPayload) (
 	}
 
 	if ack.ID != nil {
-		newInflight := make([]*fftypes.EventDeliveryResponse, 0, len(wc.inflight))
+		newInflight := make([]*core.EventDeliveryResponse, 0, len(wc.inflight))
 		for _, candidate := range wc.inflight {
 			var match bool
 			if *candidate.ID == *ack.ID {
@@ -302,7 +313,7 @@ func (wc *websocketConnection) checkAck(ack *fftypes.WSClientActionAckPayload) (
 	return inflight, nil
 }
 
-func (wc *websocketConnection) handleAck(ack *fftypes.WSClientActionAckPayload) error {
+func (wc *websocketConnection) handleAck(ack *core.WSAck) error {
 	// Perform a locked set of check
 	inflight, err := wc.checkAck(ack)
 	if err != nil {
@@ -333,4 +344,19 @@ func (wc *websocketConnection) close() {
 func (wc *websocketConnection) waitClose() {
 	<-wc.senderDone
 	<-wc.receiverDone
+}
+
+func (wc *websocketConnection) authorizeMessage(ns string) error {
+	wc.mux.Lock()
+	defer wc.mux.Unlock()
+	authReq := &fftypes.AuthReq{
+		Namespace: ns,
+		Header:    wc.header,
+	}
+	if wc.auth != nil {
+		if err := wc.auth.Authorize(wc.ctx, authReq); err != nil {
+			return err
+		}
+	}
+	return nil
 }

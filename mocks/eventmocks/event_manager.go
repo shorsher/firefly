@@ -7,9 +7,11 @@ import (
 
 	blockchain "github.com/hyperledger/firefly/pkg/blockchain"
 
+	core "github.com/hyperledger/firefly/pkg/core"
+
 	dataexchange "github.com/hyperledger/firefly/pkg/dataexchange"
 
-	fftypes "github.com/hyperledger/firefly/pkg/fftypes"
+	fftypes "github.com/hyperledger/firefly-common/pkg/fftypes"
 
 	mock "github.com/stretchr/testify/mock"
 
@@ -39,13 +41,13 @@ func (_m *EventManager) AddSystemEventListener(ns string, el system.EventListene
 	return r0
 }
 
-// BatchPinComplete provides a mock function with given fields: bi, batch, signingKey
-func (_m *EventManager) BatchPinComplete(bi blockchain.Plugin, batch *blockchain.BatchPin, signingKey *fftypes.VerifierRef) error {
-	ret := _m.Called(bi, batch, signingKey)
+// BatchPinComplete provides a mock function with given fields: namespace, batch, signingKey
+func (_m *EventManager) BatchPinComplete(namespace string, batch *blockchain.BatchPin, signingKey *core.VerifierRef) error {
+	ret := _m.Called(namespace, batch, signingKey)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(blockchain.Plugin, *blockchain.BatchPin, *fftypes.VerifierRef) error); ok {
-		r0 = rf(bi, batch, signingKey)
+	if rf, ok := ret.Get(0).(func(string, *blockchain.BatchPin, *core.VerifierRef) error); ok {
+		r0 = rf(namespace, batch, signingKey)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -67,12 +69,26 @@ func (_m *EventManager) BlockchainEvent(event *blockchain.EventWithSubscription)
 	return r0
 }
 
+// BlockchainNetworkAction provides a mock function with given fields: action, location, event, signingKey
+func (_m *EventManager) BlockchainNetworkAction(action string, location *fftypes.JSONAny, event *blockchain.Event, signingKey *core.VerifierRef) error {
+	ret := _m.Called(action, location, event, signingKey)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, *fftypes.JSONAny, *blockchain.Event, *core.VerifierRef) error); ok {
+		r0 = rf(action, location, event, signingKey)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
 // CreateUpdateDurableSubscription provides a mock function with given fields: ctx, subDef, mustNew
-func (_m *EventManager) CreateUpdateDurableSubscription(ctx context.Context, subDef *fftypes.Subscription, mustNew bool) error {
+func (_m *EventManager) CreateUpdateDurableSubscription(ctx context.Context, subDef *core.Subscription, mustNew bool) error {
 	ret := _m.Called(ctx, subDef, mustNew)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.Subscription, bool) error); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *core.Subscription, bool) error); ok {
 		r0 = rf(ctx, subDef, mustNew)
 	} else {
 		r0 = ret.Error(0)
@@ -81,17 +97,17 @@ func (_m *EventManager) CreateUpdateDurableSubscription(ctx context.Context, sub
 	return r0
 }
 
-// DXEvent provides a mock function with given fields: dx, event
-func (_m *EventManager) DXEvent(dx dataexchange.Plugin, event dataexchange.DXEvent) {
-	_m.Called(dx, event)
+// DXEvent provides a mock function with given fields: plugin, event
+func (_m *EventManager) DXEvent(plugin dataexchange.Plugin, event dataexchange.DXEvent) {
+	_m.Called(plugin, event)
 }
 
 // DeleteDurableSubscription provides a mock function with given fields: ctx, subDef
-func (_m *EventManager) DeleteDurableSubscription(ctx context.Context, subDef *fftypes.Subscription) error {
+func (_m *EventManager) DeleteDurableSubscription(ctx context.Context, subDef *core.Subscription) error {
 	ret := _m.Called(ctx, subDef)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.Subscription) error); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, *core.Subscription) error); ok {
 		r0 = rf(ctx, subDef)
 	} else {
 		r0 = ret.Error(0)
@@ -117,31 +133,15 @@ func (_m *EventManager) DeletedSubscriptions() chan<- *fftypes.UUID {
 }
 
 // GetPlugins provides a mock function with given fields:
-func (_m *EventManager) GetPlugins() []*fftypes.NodeStatusPlugin {
+func (_m *EventManager) GetPlugins() []*core.NamespaceStatusPlugin {
 	ret := _m.Called()
 
-	var r0 []*fftypes.NodeStatusPlugin
-	if rf, ok := ret.Get(0).(func() []*fftypes.NodeStatusPlugin); ok {
+	var r0 []*core.NamespaceStatusPlugin
+	if rf, ok := ret.Get(0).(func() []*core.NamespaceStatusPlugin); ok {
 		r0 = rf()
 	} else {
 		if ret.Get(0) != nil {
-			r0 = ret.Get(0).([]*fftypes.NodeStatusPlugin)
-		}
-	}
-
-	return r0
-}
-
-// GetWebSocketStatus provides a mock function with given fields:
-func (_m *EventManager) GetWebSocketStatus() *fftypes.WebSocketStatus {
-	ret := _m.Called()
-
-	var r0 *fftypes.WebSocketStatus
-	if rf, ok := ret.Get(0).(func() *fftypes.WebSocketStatus); ok {
-		r0 = rf()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*fftypes.WebSocketStatus)
+			r0 = ret.Get(0).([]*core.NamespaceStatusPlugin)
 		}
 	}
 
@@ -196,13 +196,13 @@ func (_m *EventManager) NewSubscriptions() chan<- *fftypes.UUID {
 	return r0
 }
 
-// SharedStorageBatchDownloaded provides a mock function with given fields: ss, ns, payloadRef, data
-func (_m *EventManager) SharedStorageBatchDownloaded(ss sharedstorage.Plugin, ns string, payloadRef string, data []byte) (*fftypes.UUID, error) {
-	ret := _m.Called(ss, ns, payloadRef, data)
+// SharedStorageBatchDownloaded provides a mock function with given fields: ss, payloadRef, data
+func (_m *EventManager) SharedStorageBatchDownloaded(ss sharedstorage.Plugin, payloadRef string, data []byte) (*fftypes.UUID, error) {
+	ret := _m.Called(ss, payloadRef, data)
 
 	var r0 *fftypes.UUID
-	if rf, ok := ret.Get(0).(func(sharedstorage.Plugin, string, string, []byte) *fftypes.UUID); ok {
-		r0 = rf(ss, ns, payloadRef, data)
+	if rf, ok := ret.Get(0).(func(sharedstorage.Plugin, string, []byte) *fftypes.UUID); ok {
+		r0 = rf(ss, payloadRef, data)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*fftypes.UUID)
@@ -210,8 +210,8 @@ func (_m *EventManager) SharedStorageBatchDownloaded(ss sharedstorage.Plugin, ns
 	}
 
 	var r1 error
-	if rf, ok := ret.Get(1).(func(sharedstorage.Plugin, string, string, []byte) error); ok {
-		r1 = rf(ss, ns, payloadRef, data)
+	if rf, ok := ret.Get(1).(func(sharedstorage.Plugin, string, []byte) error); ok {
+		r1 = rf(ss, payloadRef, data)
 	} else {
 		r1 = ret.Error(1)
 	}

@@ -23,23 +23,23 @@ import (
 	"io"
 
 	"github.com/docker/go-units"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
 	"github.com/hyperledger/firefly/pkg/dataexchange"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
-	"github.com/hyperledger/firefly/pkg/sharedstorage"
 )
 
 type blobStore struct {
-	dm            *dataManager
-	sharedstorage sharedstorage.Plugin
-	database      database.Plugin
-	exchange      dataexchange.Plugin
+	dm       *dataManager
+	database database.Plugin
+	exchange dataexchange.Plugin // optional
 }
 
-func (bs *blobStore) uploadVerifyBlob(ctx context.Context, ns string, id *fftypes.UUID, reader io.Reader) (hash *fftypes.Bytes32, written int64, payloadRef string, err error) {
+func (bs *blobStore) uploadVerifyBlob(ctx context.Context, id *fftypes.UUID, reader io.Reader) (hash *fftypes.Bytes32, written int64, payloadRef string, err error) {
 	hashCalc := sha256.New()
 	dxReader, dx := io.Pipe()
 	storeAndHash := io.MultiWriter(hashCalc, dx)
@@ -53,7 +53,7 @@ func (bs *blobStore) uploadVerifyBlob(ctx context.Context, ns string, id *fftype
 		copyDone <- err
 	}()
 
-	payloadRef, uploadHash, uploadSize, dxErr := bs.exchange.UploadBlob(ctx, ns, *id, dxReader)
+	payloadRef, uploadHash, uploadSize, dxErr := bs.exchange.UploadBlob(ctx, bs.dm.namespace.RemoteName, *id, dxReader)
 	dxReader.Close()
 	copyErr := <-copyDone
 	if dxErr != nil {
@@ -77,26 +77,26 @@ func (bs *blobStore) uploadVerifyBlob(ctx context.Context, ns string, id *fftype
 
 }
 
-func (bs *blobStore) UploadBlob(ctx context.Context, ns string, inData *fftypes.DataRefOrValue, mpart *fftypes.Multipart, autoMeta bool) (*fftypes.Data, error) {
+func (bs *blobStore) UploadBlob(ctx context.Context, inData *core.DataRefOrValue, mpart *ffapi.Multipart, autoMeta bool) (*core.Data, error) {
 
-	data := &fftypes.Data{
+	if bs.exchange == nil {
+		return nil, i18n.NewError(ctx, coremsgs.MsgActionNotSupported)
+	}
+
+	data := &core.Data{
 		ID:        fftypes.NewUUID(),
-		Namespace: ns,
+		Namespace: bs.dm.namespace.LocalName,
 		Created:   fftypes.Now(),
 		Validator: inData.Validator,
 		Datatype:  inData.Datatype,
 		Value:     inData.Value,
 	}
 
-	data.ID = fftypes.NewUUID()
-	data.Namespace = ns
-	data.Created = fftypes.Now()
-
-	hash, blobSize, payloadRef, err := bs.uploadVerifyBlob(ctx, ns, data.ID, mpart.Data)
+	hash, blobSize, payloadRef, err := bs.uploadVerifyBlob(ctx, data.ID, mpart.Data)
 	if err != nil {
 		return nil, err
 	}
-	data.Blob = &fftypes.BlobRef{Hash: hash}
+	data.Blob = &core.BlobRef{Hash: hash}
 
 	// autoMeta will create/update JSON metadata with the upload details
 	if autoMeta {
@@ -107,17 +107,17 @@ func (bs *blobStore) UploadBlob(ctx context.Context, ns string, inData *fftypes.
 		data.Value = fftypes.JSONAnyPtrBytes(b)
 	}
 	if data.Validator == "" {
-		data.Validator = fftypes.ValidatorTypeJSON
+		data.Validator = core.ValidatorTypeJSON
 	}
 
-	blob := &fftypes.Blob{
+	blob := &core.Blob{
 		Hash:       hash,
 		Size:       blobSize,
 		PayloadRef: payloadRef,
 		Created:    fftypes.Now(),
 	}
 
-	err = bs.dm.checkValidation(ctx, ns, data.Validator, data.Datatype, data.Value)
+	err = bs.dm.checkValidation(ctx, data.Validator, data.Datatype, data.Value)
 	if err == nil {
 		err = data.Seal(ctx, blob)
 	}
@@ -140,21 +140,22 @@ func (bs *blobStore) UploadBlob(ctx context.Context, ns string, inData *fftypes.
 	return data, nil
 }
 
-func (bs *blobStore) DownloadBlob(ctx context.Context, ns, dataID string) (*fftypes.Blob, io.ReadCloser, error) {
+func (bs *blobStore) DownloadBlob(ctx context.Context, dataID string) (*core.Blob, io.ReadCloser, error) {
 
-	if err := fftypes.ValidateFFNameField(ctx, ns, "namespace"); err != nil {
-		return nil, nil, err
+	if bs.exchange == nil {
+		return nil, nil, i18n.NewError(ctx, coremsgs.MsgActionNotSupported)
 	}
+
 	id, err := fftypes.ParseUUID(ctx, dataID)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	data, err := bs.database.GetDataByID(ctx, id, false)
+	data, err := bs.database.GetDataByID(ctx, bs.dm.namespace.LocalName, id, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	if data == nil || data.Namespace != ns {
+	if data == nil {
 		return nil, nil, i18n.NewError(ctx, coremsgs.Msg404NoResult)
 	}
 	if data.Blob == nil || data.Blob.Hash == nil {

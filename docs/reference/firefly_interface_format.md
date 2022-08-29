@@ -1,8 +1,8 @@
 ---
 layout: default
 title: FireFly Interface Format
-parent: Reference
-nav_order: 3
+parent: pages.reference
+nav_order: 6
 ---
 
 # FireFly Interface Format
@@ -35,26 +35,28 @@ There are four required fields when broadcasting a contract interface in FireFly
 
 ## Method
 
-Let's look at a what goes inside the `methods` array now. It is also a JSON object that has a `name`, a list of `params` which are the arguments the function will take and a list of `returns` which are the return values of the function. Optionally, it also has a `description` which can be helpful in OpenAPI Spec generation.
+Let's look at a what goes inside the `methods` array now. It is also a JSON object that has a `name`, a list of `params` which are the arguments the function will take and a list of `returns` which are the return values of the function. It also has an optional `description` which can be helpful in OpenAPI Spec generation. Finally, it has an optional `details` object which wraps blockchain specific information about this method. This can be used by the blockchain plugin when invoking this function, and it is also used in documentation generation.
 
 ```json
 {
     "name": "add",
     "description": "Add two numbers together",
     "params": [],
-    "returns": []
+    "returns": [],
+    "details": {}
 }
 ```
 
 ## Event
 
-What goes into the `events` array is very similar. It is also a JSON object that has a `name` and a list of `params`. The difference is that `events` don't have `returns`. Arguments that are passed to the event when it is emitted are in `params`. Optionally, it also has a `description` which can be helpful in OpenAPI Spec generation.
+What goes into the `events` array is very similar. It is also a JSON object that has a `name` and a list of `params`. The difference is that `events` don't have `returns`. Arguments that are passed to the event when it is emitted are in `params`. It also has an optional `description` which can be helpful in OpenAPI Spec generation. Finally, it has an optional `details` object which wraps blockchain specific information about this event. This can be used by the blockchain plugin when invoking this function, and it is also used in documentation generation.
 
 ```json
 {
     "name": "added",
     "description": "An event that occurs when numbers have been added", 
-    "params": []
+    "params": [],
+    "details": {}
 }
 ```
 
@@ -107,9 +109,9 @@ For example, the Ethereum plugin always needs to know what Solidity type the fie
 
 ## Automated generation of FireFly Interfaces
 
-A convenience endpoint exists on the API to facilitate converting from native blockchain interface formats such as an Ethereum ABI to the FireFly Interface format. For details, please see the [API documentation for the contract interface generation endpoint](../swagger/swagger.html#/default/postGenerateContractInterface).
+A convenience endpoint exists on the API to facilitate converting from native blockchain interface formats such as an Ethereum ABI to the FireFly Interface format. For details, please see the <a href="../swagger/swagger.html#/Default%20Namespace/postGenerateContractInterface" data-proofer-ignore>API documentation for the contract interface generation endpoint</a>.
 
-For an example of using this endpoint with a specific Ethereum contract, please see the [Getting Started guide to Work with custom smart contracts](../gettingstarted/custom_contracts.html#the-firefly-interface-format).
+For an example of using this endpoint with a specific Ethereum contract, please see the [Tutorial to Work with custom smart contracts](../tutorials/custom_contracts/index.md).
 
 ## Full Example
 
@@ -137,7 +139,10 @@ Putting it all together, here is a full example of the FireFly Interface format 
                         }
                     }
                 }
-            ]
+            ],
+            "details": {
+                "stateMutability": "viewable"
+            }
         },
         {
             "name": "set",
@@ -154,7 +159,10 @@ Putting it all together, here is a full example of the FireFly Interface format 
                     }
                 }
             ],
-            "returns": []
+            "returns": [],
+            "details": {
+                "stateMutability": "payable"
+            }
         }
     ],
     "events": [
@@ -183,7 +191,8 @@ Putting it all together, here is a full example of the FireFly Interface format 
                         }
                     }
                 }
-            ]
+            ],
+            "details": {}
         }
     ]
 }

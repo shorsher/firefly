@@ -21,20 +21,21 @@ import (
 	"testing"
 
 	"github.com/hyperledger/firefly/mocks/networkmapmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestGetNetIdentities(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mnm := &networkmapmocks.Manager{}
 	o.On("NetworkMap").Return(mnm)
 	req := httptest.NewRequest("GET", "/api/v1/network/identities", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mnm.On("GetIdentitiesGlobal", mock.Anything, mock.Anything).Return([]*fftypes.Identity{}, nil, nil)
+	mnm.On("GetIdentities", mock.Anything, mock.Anything).Return([]*core.Identity{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)
@@ -42,13 +43,14 @@ func TestGetNetIdentities(t *testing.T) {
 
 func TestGetNetIdentitiesWithVerifiers(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mnm := &networkmapmocks.Manager{}
 	o.On("NetworkMap").Return(mnm)
 	req := httptest.NewRequest("GET", "/api/v1/network/identities?fetchverifiers", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mnm.On("GetIdentitiesWithVerifiersGlobal", mock.Anything, mock.Anything).Return([]*fftypes.IdentityWithVerifiers{}, nil, nil)
+	mnm.On("GetIdentitiesWithVerifiers", mock.Anything, mock.Anything).Return([]*core.IdentityWithVerifiers{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)

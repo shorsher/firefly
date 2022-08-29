@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -166,6 +166,9 @@ func TestJSONField(t *testing.T) {
 	v, err := f.Value()
 	assert.NoError(t, err)
 	assert.Equal(t, v, []byte("{}"))
+
+	err = f.Scan(fftypes.JSONAnyPtr("{}"))
+	assert.NoError(t, err)
 
 	err = f.Scan(nil)
 	assert.NoError(t, err)

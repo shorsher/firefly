@@ -26,12 +26,12 @@ import (
 	"syscall"
 
 	"github.com/gorilla/mux"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/apiserver"
 	"github.com/hyperledger/firefly/internal/coreconfig"
-	"github.com/hyperledger/firefly/internal/orchestrator"
-	"github.com/hyperledger/firefly/pkg/config"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly/internal/namespace"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
@@ -42,11 +42,11 @@ var sigs = make(chan os.Signal, 1)
 
 var rootCmd = &cobra.Command{
 	Use:   "firefly",
-	Short: "Firefly is an API toolkit for building enterprise grade multi-party systems",
-	Long: `You build great user experiences and business logic in your favorite language,
-and let Firefly take care of the REST. The event-driven programming model gives you the
-building blocks needed for high performance, scalable multi-party systems, and the power
-to digital transformation your business ecosystem.`,
+	Short: "FireFly is a complete stack for enterprises to build and scale secure Web3 applications",
+	Long: `Hyperledger FireFly is the first open source Supernode: a complete stack for
+enterprises to build and scale secure Web3 applications. The FireFly API for digital
+assets, data flows, and blockchain transactions makes it radically faster to build
+production-ready apps on popular chains and protocols.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return run()
 	},
@@ -58,7 +58,7 @@ var showConfigCommand = &cobra.Command{
 	Short:   "List out the configuration options",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Initialize config of all plugins
-		getOrchestrator()
+		getRootManager()
 		_ = config.ReadConfig(configSuffix, cfgFile)
 
 		// Print it all out
@@ -72,23 +72,22 @@ var showConfigCommand = &cobra.Command{
 
 var cfgFile string
 
-var _utOrchestrator orchestrator.Orchestrator
+var _utManager namespace.Manager
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "f", "", "config file")
 	rootCmd.AddCommand(showConfigCommand)
 }
 
-func getOrchestrator() orchestrator.Orchestrator {
-	if _utOrchestrator != nil {
-		return _utOrchestrator
+func getRootManager() namespace.Manager {
+	if _utManager != nil {
+		return _utManager
 	}
-	return orchestrator.NewOrchestrator()
+	return namespace.NewNamespaceManager(true)
 }
 
 // Execute is called by the main method of the package
 func Execute() error {
-	apiserver.InitConfig()
 	return rootCmd.Execute()
 }
 
@@ -96,16 +95,16 @@ func run() error {
 
 	// Read the configuration
 	coreconfig.Reset()
+	apiserver.InitConfig()
 	err := config.ReadConfig(configSuffix, cfgFile)
 
 	// Setup logging after reading config (even if failed), to output header correctly
 	ctx, cancelCtx := context.WithCancel(context.Background())
 	ctx = log.WithLogger(ctx, logrus.WithField("pid", fmt.Sprintf("%d", os.Getpid())))
-	ctx = log.WithLogger(ctx, logrus.WithField("prefix", config.GetString(coreconfig.NodeName)))
 
 	config.SetupLogging(ctx)
-	log.L(ctx).Infof("Project Firefly")
-	log.L(ctx).Infof("© Copyright 2021 Kaleido, Inc.")
+	log.L(ctx).Infof("Hyperledger FireFly")
+	log.L(ctx).Infof("© Copyright 2022 Kaleido, Inc.")
 
 	// Deferred error return from reading config
 	if err != nil {
@@ -118,21 +117,23 @@ func run() error {
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 
 	for {
-		orchestratorCtx, cancelOrchestratorCtx := context.WithCancel(ctx)
-		o := getOrchestrator()
+		log.L(ctx).Infof("Starting up")
+		rootCtx, rootCancelCtx := context.WithCancel(ctx)
+		mgr := getRootManager()
 		as := apiserver.NewAPIServer()
-		go startFirefly(orchestratorCtx, cancelOrchestratorCtx, o, as, errChan)
+		go startFirefly(rootCtx, rootCancelCtx, mgr, as, errChan)
 		select {
 		case sig := <-sigs:
 			log.L(ctx).Infof("Shutting down due to %s", sig.String())
 			cancelCtx()
-			o.WaitStop()
+			mgr.WaitStop()
 			return nil
-		case <-orchestratorCtx.Done():
+		case <-rootCtx.Done():
 			log.L(ctx).Infof("Restarting due to configuration change")
-			o.WaitStop()
+			mgr.WaitStop()
 			// Re-read the configuration
 			coreconfig.Reset()
+			apiserver.InitConfig()
 			if err := config.ReadConfig(configSuffix, cfgFile); err != nil {
 				cancelCtx()
 				return err
@@ -144,7 +145,7 @@ func run() error {
 	}
 }
 
-func startFirefly(ctx context.Context, cancelCtx context.CancelFunc, o orchestrator.Orchestrator, as apiserver.Server, errChan chan error) {
+func startFirefly(ctx context.Context, cancelCtx context.CancelFunc, mgr namespace.Manager, as apiserver.Server, errChan chan error) {
 	var err error
 	// Start debug listener
 	debugPort := config.GetInt(coreconfig.DebugPort)
@@ -161,18 +162,18 @@ func startFirefly(ctx context.Context, cancelCtx context.CancelFunc, o orchestra
 		log.L(ctx).Debugf("Debug HTTP endpoint listening on localhost:%d", debugPort)
 	}
 
-	if err = o.Init(ctx, cancelCtx); err != nil {
+	if err = mgr.Init(ctx, cancelCtx); err != nil {
 		errChan <- err
 		return
 	}
-	if err = o.Start(); err != nil {
+	if err = mgr.Start(); err != nil {
 		errChan <- err
 		return
 	}
 
 	// Run the API Server
 
-	if err = as.Serve(ctx, o); err != nil {
+	if err = as.Serve(ctx, mgr); err != nil {
 		errChan <- err
 	}
 }

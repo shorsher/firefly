@@ -4,7 +4,9 @@ package blockchainmocks
 
 import (
 	blockchain "github.com/hyperledger/firefly/pkg/blockchain"
-	fftypes "github.com/hyperledger/firefly/pkg/fftypes"
+	core "github.com/hyperledger/firefly/pkg/core"
+
+	fftypes "github.com/hyperledger/firefly-common/pkg/fftypes"
 
 	mock "github.com/stretchr/testify/mock"
 )
@@ -14,13 +16,13 @@ type Callbacks struct {
 	mock.Mock
 }
 
-// BatchPinComplete provides a mock function with given fields: batch, signingKey
-func (_m *Callbacks) BatchPinComplete(batch *blockchain.BatchPin, signingKey *fftypes.VerifierRef) error {
-	ret := _m.Called(batch, signingKey)
+// BatchPinComplete provides a mock function with given fields: namespace, batch, signingKey
+func (_m *Callbacks) BatchPinComplete(namespace string, batch *blockchain.BatchPin, signingKey *core.VerifierRef) error {
+	ret := _m.Called(namespace, batch, signingKey)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(*blockchain.BatchPin, *fftypes.VerifierRef) error); ok {
-		r0 = rf(batch, signingKey)
+	if rf, ok := ret.Get(0).(func(string, *blockchain.BatchPin, *core.VerifierRef) error); ok {
+		r0 = rf(namespace, batch, signingKey)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -42,7 +44,16 @@ func (_m *Callbacks) BlockchainEvent(event *blockchain.EventWithSubscription) er
 	return r0
 }
 
-// BlockchainOpUpdate provides a mock function with given fields: plugin, operationID, txState, blockchainTXID, errorMessage, opOutput
-func (_m *Callbacks) BlockchainOpUpdate(plugin blockchain.Plugin, operationID *fftypes.UUID, txState fftypes.OpStatus, blockchainTXID string, errorMessage string, opOutput fftypes.JSONObject) {
-	_m.Called(plugin, operationID, txState, blockchainTXID, errorMessage, opOutput)
+// BlockchainNetworkAction provides a mock function with given fields: action, location, event, signingKey
+func (_m *Callbacks) BlockchainNetworkAction(action string, location *fftypes.JSONAny, event *blockchain.Event, signingKey *core.VerifierRef) error {
+	ret := _m.Called(action, location, event, signingKey)
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(string, *fftypes.JSONAny, *blockchain.Event, *core.VerifierRef) error); ok {
+		r0 = rf(action, location, event, signingKey)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
 }

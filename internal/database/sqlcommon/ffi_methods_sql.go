@@ -21,11 +21,12 @@ import (
 	"database/sql"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 var (
@@ -38,6 +39,7 @@ var (
 		"description",
 		"params",
 		"returns",
+		"details",
 	}
 	ffiMethodFilterFieldMap = map[string]string{
 		"interface": "interface_id",
@@ -71,7 +73,7 @@ func (s *SQLCommon) UpsertFFIMethod(ctx context.Context, method *fftypes.FFIMeth
 				Set("returns", method.Returns).
 				Where(sq.And{sq.Eq{"interface_id": method.Interface}, sq.Eq{"namespace": method.Namespace}, sq.Eq{"pathname": method.Pathname}}),
 			func() {
-				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIMethods, fftypes.ChangeEventTypeUpdated, method.Namespace, method.ID)
+				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIMethods, core.ChangeEventTypeUpdated, method.Namespace, method.ID)
 			},
 		); err != nil {
 			return err
@@ -89,9 +91,10 @@ func (s *SQLCommon) UpsertFFIMethod(ctx context.Context, method *fftypes.FFIMeth
 					method.Description,
 					method.Params,
 					method.Returns,
+					method.Details,
 				),
 			func() {
-				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIMethods, fftypes.ChangeEventTypeCreated, method.Namespace, method.ID)
+				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIMethods, core.ChangeEventTypeCreated, method.Namespace, method.ID)
 			},
 		); err != nil {
 			return err
@@ -112,6 +115,7 @@ func (s *SQLCommon) ffiMethodResult(ctx context.Context, row *sql.Rows) (*fftype
 		&method.Description,
 		&method.Params,
 		&method.Returns,
+		&method.Details,
 	)
 	if err != nil {
 		return nil, i18n.WrapError(ctx, err, coremsgs.MsgDBReadErr, ffimethodsTable)
@@ -143,8 +147,9 @@ func (s *SQLCommon) getFFIMethodPred(ctx context.Context, desc string, pred inte
 	return ci, nil
 }
 
-func (s *SQLCommon) GetFFIMethods(ctx context.Context, filter database.Filter) (methods []*fftypes.FFIMethod, res *database.FilterResult, err error) {
-	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(ffiMethodsColumns...).From(ffimethodsTable), filter, ffiMethodFilterFieldMap, []interface{}{"sequence"})
+func (s *SQLCommon) GetFFIMethods(ctx context.Context, namespace string, filter database.Filter) (methods []*fftypes.FFIMethod, res *database.FilterResult, err error) {
+	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(ffiMethodsColumns...).From(ffimethodsTable),
+		filter, ffiMethodFilterFieldMap, []interface{}{"sequence"}, sq.Eq{"namespace": namespace})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -168,5 +173,5 @@ func (s *SQLCommon) GetFFIMethods(ctx context.Context, filter database.Filter) (
 }
 
 func (s *SQLCommon) GetFFIMethod(ctx context.Context, ns string, interfaceID *fftypes.UUID, pathName string) (*fftypes.FFIMethod, error) {
-	return s.getFFIMethodPred(ctx, ns+":"+pathName, sq.And{sq.Eq{"namespace": ns}, sq.Eq{"interface_id": interfaceID}, sq.Eq{"pathname": pathName}})
+	return s.getFFIMethodPred(ctx, ns+":"+pathName, sq.Eq{"namespace": ns, "interface_id": interfaceID, "pathname": pathName})
 }

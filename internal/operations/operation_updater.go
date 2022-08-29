@@ -22,32 +22,20 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly-common/pkg/retry"
 	"github.com/hyperledger/firefly/internal/coreconfig"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/retry"
 	"github.com/hyperledger/firefly/internal/txcommon"
-	"github.com/hyperledger/firefly/pkg/config"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
-// OperationUpdate is dispatched asynchronously to perform an update.
-type OperationUpdate struct {
-	ID             *fftypes.UUID
-	Status         fftypes.OpStatus
-	BlockchainTXID string
-	ErrorMessage   string
-	Output         fftypes.JSONObject
-	VerifyManifest bool
-	DXManifest     string
-	DXHash         string
-	OnComplete     func()
-}
-
 type operationUpdaterBatch struct {
-	updates        []*OperationUpdate
+	updates        []*core.OperationUpdate
 	timeoutContext context.Context
 	timeoutCancel  func()
 }
@@ -59,7 +47,7 @@ type operationUpdater struct {
 	manager     *operationsManager
 	database    database.Plugin
 	txHelper    txcommon.Helper
-	workQueues  []chan *OperationUpdate
+	workQueues  []chan *core.OperationUpdate
 	workersDone []chan struct{}
 	conf        operationUpdaterConf
 	closed      bool
@@ -99,33 +87,43 @@ func newOperationUpdater(ctx context.Context, om *operationsManager, di database
 }
 
 // pickWorker ensures multiple updates for the same ID go to the same worker
-func (ou *operationUpdater) pickWorker(ctx context.Context, update *OperationUpdate) chan *OperationUpdate {
-	worker := update.ID.HashBucket(ou.conf.workerCount)
-	log.L(ctx).Debugf("Submitting operation update id=%s status=%s blockchainTX=%s worker=opu_%.3d", update.ID, update.Status, update.BlockchainTXID, worker)
+func (ou *operationUpdater) pickWorker(ctx context.Context, id *fftypes.UUID, update *core.OperationUpdate) chan *core.OperationUpdate {
+	worker := id.HashBucket(ou.conf.workerCount)
+	log.L(ctx).Debugf("Submitting operation update id=%s status=%s blockchainTX=%s worker=opu_%.3d", id, update.Status, update.BlockchainTXID, worker)
 	return ou.workQueues[worker]
 }
 
-func (ou *operationUpdater) SubmitOperationUpdate(ctx context.Context, update *OperationUpdate) {
+func (ou *operationUpdater) SubmitOperationUpdate(ctx context.Context, update *core.OperationUpdate) {
+	ns, id, err := core.ParseNamespacedOpID(ctx, update.NamespacedOpID)
+	if err != nil {
+		log.L(ctx).Warnf("Unable to update operation '%s' due to invalid ID: %s", update.NamespacedOpID, err)
+		return
+	}
+	if ns != ou.manager.namespace {
+		log.L(ou.ctx).Debugf("Ignoring operation update from different namespace '%s'", ns)
+		return
+	}
+
 	if ou.conf.workerCount > 0 {
 		select {
-		case ou.pickWorker(ctx, update) <- update:
+		case ou.pickWorker(ctx, id, update) <- update:
 		case <-ou.ctx.Done():
 			log.L(ctx).Debugf("Not submitting operation update due to cancelled context")
 		}
 		return
 	}
 	// Otherwise do it in-line on this context
-	err := ou.doBatchUpdateWithRetry(ctx, []*OperationUpdate{update})
+	err = ou.doBatchUpdateWithRetry(ctx, []*core.OperationUpdate{update})
 	if err != nil {
 		log.L(ctx).Warnf("Exiting while updating operation: %s", err)
 	}
 }
 
 func (ou *operationUpdater) initQueues() {
-	ou.workQueues = make([]chan *OperationUpdate, ou.conf.workerCount)
+	ou.workQueues = make([]chan *core.OperationUpdate, ou.conf.workerCount)
 	ou.workersDone = make([]chan struct{}, ou.conf.workerCount)
 	for i := 0; i < ou.conf.workerCount; i++ {
-		ou.workQueues[i] = make(chan *OperationUpdate, ou.conf.queueLength)
+		ou.workQueues[i] = make(chan *core.OperationUpdate, ou.conf.queueLength)
 		ou.workersDone[i] = make(chan struct{})
 	}
 }
@@ -177,7 +175,7 @@ func (ou *operationUpdater) updaterLoop(index int) {
 	}
 }
 
-func (ou *operationUpdater) doBatchUpdateWithRetry(ctx context.Context, updates []*OperationUpdate) error {
+func (ou *operationUpdater) doBatchUpdateWithRetry(ctx context.Context, updates []*core.OperationUpdate) error {
 	return ou.retry.Do(ctx, "operation update", func(attempt int) (retry bool, err error) {
 		err = ou.database.RunAsGroup(ctx, func(ctx context.Context) error {
 			return ou.doBatchUpdate(ctx, updates)
@@ -194,15 +192,24 @@ func (ou *operationUpdater) doBatchUpdateWithRetry(ctx context.Context, updates 
 	})
 }
 
-func (ou *operationUpdater) doBatchUpdate(ctx context.Context, updates []*OperationUpdate) error {
+func (ou *operationUpdater) doBatchUpdate(ctx context.Context, updates []*core.OperationUpdate) error {
 
 	// Get all the operations that match
-	opIDs := make([]driver.Value, len(updates))
-	for idx, update := range updates {
-		opIDs[idx] = update.ID
+	opIDs := make([]driver.Value, 0, len(updates))
+	for _, update := range updates {
+		_, id, err := core.ParseNamespacedOpID(ctx, update.NamespacedOpID)
+		if err != nil {
+			log.L(ctx).Warnf("Unable to update operation '%s' due to invalid ID: %s", update.NamespacedOpID, err)
+			continue
+		}
+		opIDs = append(opIDs, id)
 	}
+	if len(opIDs) == 0 {
+		return nil
+	}
+	// TODO: cache these operation queries
 	opFilter := database.OperationQueryFactory.NewFilter(ctx).In("id", opIDs)
-	ops, _, err := ou.database.GetOperations(ctx, opFilter)
+	ops, _, err := ou.database.GetOperations(ctx, ou.manager.namespace, opFilter)
 	if err != nil {
 		return err
 	}
@@ -214,10 +221,10 @@ func (ou *operationUpdater) doBatchUpdate(ctx context.Context, updates []*Operat
 			txIDs = append(txIDs, op.Transaction)
 		}
 	}
-	var transactions []*fftypes.Transaction
+	var transactions []*core.Transaction
 	if len(txIDs) > 0 {
 		txFilter := database.TransactionQueryFactory.NewFilter(ctx).In("id", txIDs)
-		transactions, _, err = ou.database.GetTransactions(ctx, txFilter)
+		transactions, _, err = ou.database.GetTransactions(ctx, ou.manager.namespace, txFilter)
 		if err != nil {
 			return err
 		}
@@ -233,23 +240,33 @@ func (ou *operationUpdater) doBatchUpdate(ctx context.Context, updates []*Operat
 	return nil
 }
 
-func (ou *operationUpdater) doUpdate(ctx context.Context, update *OperationUpdate, ops []*fftypes.Operation, transactions []*fftypes.Transaction) error {
+func (ou *operationUpdater) doUpdate(ctx context.Context, update *core.OperationUpdate, ops []*core.Operation, transactions []*core.Transaction) error {
+
+	_, updateID, err := core.ParseNamespacedOpID(ctx, update.NamespacedOpID)
+	if err != nil {
+		log.L(ctx).Warnf("Unable to update operation '%s' due to invalid ID: %s", update.NamespacedOpID, err)
+		return nil
+	}
 
 	// Find the operation we already retrieved, and do the update
-	var op *fftypes.Operation
+	var op *core.Operation
 	for _, candidate := range ops {
-		if update.ID.Equals(candidate.ID) {
+		if updateID.Equals(candidate.ID) {
+			if update.Plugin != candidate.Plugin {
+				log.L(ctx).Debugf("Operation update '%s' from '%s' ignored, as it does not match operation source '%s'", update.NamespacedOpID, update.Plugin, candidate.Plugin)
+				return nil
+			}
 			op = candidate
 			break
 		}
 	}
 	if op == nil {
-		log.L(ctx).Warnf("Operation update '%s' ignored, as it was not submitted by this node", update.ID)
+		log.L(ctx).Warnf("Operation update '%s' ignored, as it was not submitted by this node", update.NamespacedOpID)
 		return nil
 	}
 
 	// Match a TX we already retrieved, if found add a specified Blockchain Transaction ID to it
-	var tx *fftypes.Transaction
+	var tx *core.Transaction
 	if op.Transaction != nil && update.BlockchainTXID != "" {
 		for _, candidate := range transactions {
 			if op.Transaction.Equals(candidate.ID) {
@@ -277,20 +294,20 @@ func (ou *operationUpdater) doUpdate(ctx context.Context, update *OperationUpdat
 		}
 	}
 
-	if err := ou.database.ResolveOperation(ctx, op.Namespace, op.ID, update.Status, update.ErrorMessage, update.Output); err != nil {
+	if err := ou.database.ResolveOperation(ctx, op.Namespace, op.ID, update.Status, &update.ErrorMessage, update.Output); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func (ou *operationUpdater) verifyManifest(ctx context.Context, update *OperationUpdate, op *fftypes.Operation) error {
+func (ou *operationUpdater) verifyManifest(ctx context.Context, update *core.OperationUpdate, op *core.Operation) error {
 
-	if op.Type == fftypes.OpTypeDataExchangeSendBatch && update.Status == fftypes.OpStatusSucceeded {
+	if op.Type == core.OpTypeDataExchangeSendBatch && update.Status == core.OpStatusSucceeded {
 		batchID, _ := fftypes.ParseUUID(ctx, op.Input.GetString("batch"))
 		expectedManifest := ""
 		if batchID != nil {
-			batch, err := ou.database.GetBatchByID(ctx, batchID)
+			batch, err := ou.database.GetBatchByID(ctx, ou.manager.namespace, batchID)
 			if err != nil {
 				return err
 			}
@@ -300,21 +317,21 @@ func (ou *operationUpdater) verifyManifest(ctx context.Context, update *Operatio
 		}
 		if update.DXManifest != expectedManifest {
 			// Log and map to failure for user to see that the receiver did not provide a matching acknowledgement
-			mismatchErr := i18n.NewError(ctx, coremsgs.MsgManifestMismatch, fftypes.OpStatusSucceeded, update.DXManifest)
+			mismatchErr := i18n.NewError(ctx, coremsgs.MsgManifestMismatch, core.OpStatusSucceeded, update.DXManifest)
 			log.L(ctx).Errorf("DX transfer %s: %s", op.ID, mismatchErr.Error())
 			update.ErrorMessage = mismatchErr.Error()
-			update.Status = fftypes.OpStatusFailed
+			update.Status = core.OpStatusFailed
 		}
 	}
 
-	if op.Type == fftypes.OpTypeDataExchangeSendBlob && update.Status == fftypes.OpStatusSucceeded {
+	if op.Type == core.OpTypeDataExchangeSendBlob && update.Status == core.OpStatusSucceeded {
 		expectedHash := op.Input.GetString("hash")
 		if update.DXHash != expectedHash {
 			// Log and map to failure for user to see that the receiver did not provide a matching hash
 			mismatchErr := i18n.NewError(ctx, coremsgs.MsgBlobHashMismatch, expectedHash, update.DXHash)
 			log.L(ctx).Errorf("DX transfer %s: %s", op.ID, mismatchErr.Error())
 			update.ErrorMessage = mismatchErr.Error()
-			update.Status = fftypes.OpStatusFailed
+			update.Status = core.OpStatusFailed
 		}
 	}
 

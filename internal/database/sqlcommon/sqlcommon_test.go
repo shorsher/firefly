@@ -25,9 +25,28 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	sq "github.com/Masterminds/squirrel"
 	"github.com/golang-migrate/migrate/v4"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly/mocks/databasemocks"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestInitSQLCommonMissingURL(t *testing.T) {
+	conf := config.RootSection("unittest.db")
+	conf.AddKnownKey("url", "")
+	s := &SQLCommon{}
+	tp := &sqliteGoTestProvider{
+		t:            t,
+		callbacks:    &databasemocks.Callbacks{},
+		capabilities: &database.Capabilities{},
+		config:       conf,
+	}
+	s.InitConfig(tp, conf)
+	err := s.Init(context.Background(), tp, conf, nil)
+	assert.Regexp(t, "FF10138.*url", err)
+}
 
 func TestInitSQLCommon(t *testing.T) {
 	s, cleanup := newSQLiteTestProvider(t)
@@ -38,22 +57,22 @@ func TestInitSQLCommon(t *testing.T) {
 
 func TestInitSQLCommonMissingOptions(t *testing.T) {
 	s := &SQLCommon{}
-	err := s.Init(context.Background(), nil, nil, nil, nil)
+	err := s.Init(context.Background(), nil, nil, nil)
 	assert.Regexp(t, "FF10112", err)
 }
 
 func TestInitSQLCommonOpenFailed(t *testing.T) {
 	mp := newMockProvider()
 	mp.openError = fmt.Errorf("pop")
-	err := mp.SQLCommon.Init(context.Background(), mp, mp.prefix, mp.callbacks, mp.capabilities)
+	err := mp.SQLCommon.Init(context.Background(), mp, mp.config, mp.capabilities)
 	assert.Regexp(t, "FF10112.*pop", err)
 }
 
 func TestInitSQLCommonMigrationOpenFailed(t *testing.T) {
 	mp := newMockProvider()
-	mp.prefix.Set(SQLConfMigrationsAuto, true)
+	mp.config.Set(SQLConfMigrationsAuto, true)
 	mp.getMigrationDriverError = fmt.Errorf("pop")
-	err := mp.SQLCommon.Init(context.Background(), mp, mp.prefix, mp.callbacks, mp.capabilities)
+	err := mp.SQLCommon.Init(context.Background(), mp, mp.config, mp.capabilities)
 	assert.Regexp(t, "FF10163.*pop", err)
 }
 
@@ -343,4 +362,25 @@ func TestInsertTxRowsIncompleteReturn(t *testing.T) {
 	sb := sq.Insert("table").Columns("col1").Values(("val1"))
 	err = s.insertTxRows(ctx, "table1", tx, sb, nil, []int64{1, 2}, false)
 	assert.Regexp(t, "FF10116", err)
+}
+
+func TestNamespaceCallbacks(t *testing.T) {
+	tcb := &databasemocks.Callbacks{}
+	cb := callbacks{
+		handlers: map[string]database.Callbacks{
+			"ns1": tcb,
+		},
+	}
+	id := fftypes.NewUUID()
+	hash := fftypes.NewRandB32()
+
+	tcb.On("OrderedUUIDCollectionNSEvent", database.CollectionMessages, core.ChangeEventTypeCreated, "ns1", id, int64(1)).Return()
+	tcb.On("OrderedCollectionNSEvent", database.CollectionPins, core.ChangeEventTypeCreated, "ns1", int64(1)).Return()
+	tcb.On("UUIDCollectionNSEvent", database.CollectionOperations, core.ChangeEventTypeCreated, "ns1", id).Return()
+	tcb.On("HashCollectionNSEvent", database.CollectionGroups, core.ChangeEventTypeUpdated, "ns1", hash).Return()
+
+	cb.OrderedUUIDCollectionNSEvent(database.CollectionMessages, core.ChangeEventTypeCreated, "ns1", id, 1)
+	cb.OrderedCollectionNSEvent(database.CollectionPins, core.ChangeEventTypeCreated, "ns1", 1)
+	cb.UUIDCollectionNSEvent(database.CollectionOperations, core.ChangeEventTypeCreated, "ns1", id)
+	cb.HashCollectionNSEvent(database.CollectionGroups, core.ChangeEventTypeUpdated, "ns1", hash)
 }

@@ -19,27 +19,26 @@ package apiserver
 import (
 	"net/http"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 )
 
-var getTokenBalances = &oapispec.Route{
-	Name:   "getTokenBalances",
-	Path:   "namespaces/{ns}/tokens/balances",
-	Method: http.MethodGet,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
+var getTokenBalances = &ffapi.Route{
+	Name:            "getTokenBalances",
+	Path:            "tokens/balances",
+	Method:          http.MethodGet,
+	PathParams:      nil,
 	QueryParams:     nil,
-	FilterFactory:   database.TokenBalanceQueryFactory,
 	Description:     coremsgs.APIEndpointsGetTokenBalances,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return []*fftypes.TokenBalance{} },
+	JSONOutputValue: func() interface{} { return []*core.TokenBalance{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		return filterResult(getOr(r.Ctx).Assets().GetTokenBalances(r.Ctx, r.PP["ns"], r.Filter))
+	Extensions: &coreExtensions{
+		FilterFactory: database.TokenBalanceQueryFactory,
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			return filterResult(cr.or.Assets().GetTokenBalances(cr.ctx, cr.filter))
+		},
 	},
 }

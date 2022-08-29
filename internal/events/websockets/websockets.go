@@ -22,34 +22,35 @@ import (
 	"sync"
 
 	"github.com/gorilla/websocket"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/pkg/config"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/events"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 type WebSockets struct {
 	ctx          context.Context
 	capabilities *events.Capabilities
-	callbacks    events.Callbacks
+	callbacks    map[string]events.Callbacks
 	connections  map[string]*websocketConnection
 	connMux      sync.Mutex
 	upgrader     websocket.Upgrader
+	auth         core.Authorizer
 }
 
 func (ws *WebSockets) Name() string { return "websockets" }
 
-func (ws *WebSockets) Init(ctx context.Context, prefix config.Prefix, callbacks events.Callbacks) error {
+func (ws *WebSockets) Init(ctx context.Context, config config.Section) error {
 	*ws = WebSockets{
 		ctx:          ctx,
 		connections:  make(map[string]*websocketConnection),
 		capabilities: &events.Capabilities{},
-		callbacks:    callbacks,
+		callbacks:    make(map[string]events.Callbacks),
 		upgrader: websocket.Upgrader{
-			ReadBufferSize:  int(prefix.GetByteSize(ReadBufferSize)),
-			WriteBufferSize: int(prefix.GetByteSize(WriteBufferSize)),
+			ReadBufferSize:  int(config.GetByteSize(ReadBufferSize)),
+			WriteBufferSize: int(config.GetByteSize(WriteBufferSize)),
 			CheckOrigin: func(r *http.Request) bool {
 				// Cors is handled by the API server that wraps this handler
 				return true
@@ -59,15 +60,20 @@ func (ws *WebSockets) Init(ctx context.Context, prefix config.Prefix, callbacks 
 	return nil
 }
 
+func (ws *WebSockets) SetAuthorizer(auth core.Authorizer) {
+	ws.auth = auth
+}
+
+func (ws *WebSockets) SetHandler(namespace string, handler events.Callbacks) error {
+	ws.callbacks[namespace] = handler
+	return nil
+}
+
 func (ws *WebSockets) Capabilities() *events.Capabilities {
 	return ws.capabilities
 }
 
-func (ws *WebSockets) GetOptionsSchema(ctx context.Context) string {
-	return `{}` // no extra options currently
-}
-
-func (ws *WebSockets) ValidateOptions(options *fftypes.SubscriptionOptions) error {
+func (ws *WebSockets) ValidateOptions(options *core.SubscriptionOptions) error {
 	// We don't support streaming the full data over websockets
 	if options.WithData != nil && *options.WithData {
 		return i18n.NewError(ws.ctx, coremsgs.MsgWebsocketsNoData)
@@ -77,7 +83,7 @@ func (ws *WebSockets) ValidateOptions(options *fftypes.SubscriptionOptions) erro
 	return nil
 }
 
-func (ws *WebSockets) DeliveryRequest(connID string, sub *fftypes.Subscription, event *fftypes.EventDelivery, data fftypes.DataArray) error {
+func (ws *WebSockets) DeliveryRequest(connID string, sub *core.Subscription, event *core.EventDelivery, data core.DataArray) error {
 	ws.connMux.Lock()
 	conn, ok := ws.connections[connID]
 	ws.connMux.Unlock()
@@ -95,28 +101,33 @@ func (ws *WebSockets) ServeHTTP(res http.ResponseWriter, req *http.Request) {
 	}
 
 	ws.connMux.Lock()
-	wc := newConnection(ws.ctx, ws, wsConn, req)
+	wc := newConnection(ws.ctx, ws, wsConn, req, ws.auth)
 	ws.connections[wc.connID] = wc
 	ws.connMux.Unlock()
 
 	wc.processAutoStart(req)
 }
 
-func (ws *WebSockets) ack(connID string, inflight *fftypes.EventDeliveryResponse) {
-	ws.callbacks.DeliveryResponse(connID, inflight)
+func (ws *WebSockets) ack(connID string, inflight *core.EventDeliveryResponse) {
+	if cb, ok := ws.callbacks[inflight.Subscription.Namespace]; ok {
+		cb.DeliveryResponse(connID, inflight)
+	}
 }
 
-func (ws *WebSockets) start(wc *websocketConnection, start *fftypes.WSClientActionStartPayload) error {
+func (ws *WebSockets) start(wc *websocketConnection, start *core.WSStart) error {
 	if start.Namespace == "" || (!start.Ephemeral && start.Name == "") {
 		return i18n.NewError(ws.ctx, coremsgs.MsgWSInvalidStartAction)
 	}
-	if start.Ephemeral {
-		return ws.callbacks.EphemeralSubscription(wc.connID, start.Namespace, &start.Filter, &start.Options)
+	if cb, ok := ws.callbacks[start.Namespace]; ok {
+		if start.Ephemeral {
+			return cb.EphemeralSubscription(wc.connID, start.Namespace, &start.Filter, &start.Options)
+		}
+		// We can have multiple subscriptions on a single connection
+		return cb.RegisterConnection(wc.connID, func(sr core.SubscriptionRef) bool {
+			return wc.durableSubMatcher(sr)
+		})
 	}
-	// We can have multiple subscriptions on a single
-	return ws.callbacks.RegisterConnection(wc.connID, func(sr fftypes.SubscriptionRef) bool {
-		return wc.durableSubMatcher(sr)
-	})
+	return i18n.NewError(ws.ctx, coremsgs.MsgNamespaceDoesNotExist)
 }
 
 func (ws *WebSockets) connClosed(connID string) {
@@ -124,7 +135,9 @@ func (ws *WebSockets) connClosed(connID string) {
 	delete(ws.connections, connID)
 	ws.connMux.Unlock()
 	// Drop lock before calling back
-	ws.callbacks.ConnectionClosed(connID)
+	for _, cb := range ws.callbacks {
+		cb.ConnectionClosed(connID)
+	}
 }
 
 func (ws *WebSockets) WaitClosed() {
@@ -139,10 +152,10 @@ func (ws *WebSockets) WaitClosed() {
 	}
 }
 
-func (ws *WebSockets) GetStatus() *fftypes.WebSocketStatus {
-	status := &fftypes.WebSocketStatus{
+func (ws *WebSockets) GetStatus() *core.WebSocketStatus {
+	status := &core.WebSocketStatus{
 		Enabled:     true,
-		Connections: make([]*fftypes.WSConnectionStatus, 0),
+		Connections: make([]*core.WSConnectionStatus, 0),
 	}
 
 	ws.connMux.Lock()
@@ -154,15 +167,15 @@ func (ws *WebSockets) GetStatus() *fftypes.WebSocketStatus {
 
 	for _, wc := range connections {
 		wc.mux.Lock()
-		conn := &fftypes.WSConnectionStatus{
+		conn := &core.WSConnectionStatus{
 			ID:            wc.connID,
 			RemoteAddress: wc.remoteAddr,
 			UserAgent:     wc.userAgent,
-			Subscriptions: make([]*fftypes.WSSubscriptionStatus, 0),
+			Subscriptions: make([]*core.WSSubscriptionStatus, 0),
 		}
 		status.Connections = append(status.Connections, conn)
 		for _, s := range wc.started {
-			sub := &fftypes.WSSubscriptionStatus{
+			sub := &core.WSSubscriptionStatus{
 				Name:      s.name,
 				Namespace: s.namespace,
 				Ephemeral: s.ephemeral,

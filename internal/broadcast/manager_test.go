@@ -21,22 +21,23 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/internal/batch"
 	"github.com/hyperledger/firefly/internal/coreconfig"
 	"github.com/hyperledger/firefly/internal/data"
 	"github.com/hyperledger/firefly/internal/operations"
 	"github.com/hyperledger/firefly/mocks/batchmocks"
-	"github.com/hyperledger/firefly/mocks/batchpinmocks"
 	"github.com/hyperledger/firefly/mocks/blockchainmocks"
 	"github.com/hyperledger/firefly/mocks/databasemocks"
 	"github.com/hyperledger/firefly/mocks/dataexchangemocks"
 	"github.com/hyperledger/firefly/mocks/datamocks"
 	"github.com/hyperledger/firefly/mocks/identitymanagermocks"
 	"github.com/hyperledger/firefly/mocks/metricsmocks"
+	"github.com/hyperledger/firefly/mocks/multipartymocks"
 	"github.com/hyperledger/firefly/mocks/operationmocks"
 	"github.com/hyperledger/firefly/mocks/sharedstoragemocks"
 	"github.com/hyperledger/firefly/mocks/syncasyncmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -51,7 +52,7 @@ func newTestBroadcastCommon(t *testing.T, metricsEnabled bool) (*broadcastManage
 	mba := &batchmocks.Manager{}
 	mdx := &dataexchangemocks.Plugin{}
 	msa := &syncasyncmocks.Bridge{}
-	mbp := &batchpinmocks.Submitter{}
+	mmp := &multipartymocks.Manager{}
 	mmi := &metricsmocks.Manager{}
 	mom := &operationmocks.Manager{}
 	mmi.On("IsMetricsEnabled").Return(metricsEnabled)
@@ -59,11 +60,11 @@ func newTestBroadcastCommon(t *testing.T, metricsEnabled bool) (*broadcastManage
 	mpi.On("Name").Return("ut_sharedstorage").Maybe()
 	mba.On("RegisterDispatcher",
 		broadcastDispatcherName,
-		fftypes.TransactionTypeBatchPin,
-		[]fftypes.MessageType{
-			fftypes.MessageTypeBroadcast,
-			fftypes.MessageTypeDefinition,
-			fftypes.MessageTypeTransferBroadcast,
+		core.TransactionTypeBatchPin,
+		[]core.MessageType{
+			core.MessageTypeBroadcast,
+			core.MessageTypeDefinition,
+			core.MessageTypeTransferBroadcast,
 		}, mock.Anything, mock.Anything).Return()
 	mom.On("RegisterHandler", mock.Anything, mock.Anything, mock.Anything)
 
@@ -75,7 +76,8 @@ func newTestBroadcastCommon(t *testing.T, metricsEnabled bool) (*broadcastManage
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b, err := NewBroadcastManager(ctx, mdi, mim, mdm, mbi, mdx, mpi, mba, msa, mbp, mmi, mom)
+	ns := core.NamespaceRef{LocalName: "ns1", RemoteName: "ns1"}
+	b, err := NewBroadcastManager(ctx, ns, mdi, mbi, mdx, mpi, mim, mdm, mba, msa, mmp, mmi, mom)
 	assert.NoError(t, err)
 	return b.(*broadcastManager), cancel
 }
@@ -92,7 +94,7 @@ func newTestBroadcastWithMetrics(t *testing.T) (*broadcastManager, func()) {
 }
 
 func TestInitFail(t *testing.T) {
-	_, err := NewBroadcastManager(context.Background(), nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	_, err := NewBroadcastManager(context.Background(), core.NamespaceRef{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	assert.Regexp(t, "FF10128", err)
 }
 
@@ -109,17 +111,17 @@ func TestBroadcastMessageGood(t *testing.T) {
 	dataID := fftypes.NewUUID()
 	dataHash := fftypes.NewRandB32()
 	newMsg := &data.NewMessage{
-		Message: &fftypes.MessageInOut{
-			Message: fftypes.Message{
-				Header: fftypes.MessageHeader{
+		Message: &core.MessageInOut{
+			Message: core.Message{
+				Header: core.MessageHeader{
 					ID: fftypes.NewUUID(),
 				},
-				Data: fftypes.DataRefs{
+				Data: core.DataRefs{
 					{ID: dataID, Hash: dataHash},
 				},
 			},
 		},
-		AllData: fftypes.DataArray{
+		AllData: core.DataArray{
 			{ID: dataID, Hash: dataHash},
 		},
 	}
@@ -145,12 +147,12 @@ func TestBroadcastMessageBad(t *testing.T) {
 	defer cancel()
 
 	newMsg := &data.NewMessage{
-		Message: &fftypes.MessageInOut{
-			Message: fftypes.Message{
-				Header: fftypes.MessageHeader{
+		Message: &core.MessageInOut{
+			Message: core.Message{
+				Header: core.MessageHeader{
 					ID: fftypes.NewUUID(),
 				},
-				Data: fftypes.DataRefs{
+				Data: core.DataRefs{
 					{ID: fftypes.NewUUID(), Hash: nil},
 				},
 			},
@@ -166,19 +168,22 @@ func TestBroadcastMessageBad(t *testing.T) {
 
 }
 
-func TestDispatchBatchBlobsFaill(t *testing.T) {
+func TestDispatchBatchBlobsFail(t *testing.T) {
 	bm, cancel := newTestBroadcast(t)
 	defer cancel()
 
 	blobHash := fftypes.NewRandB32()
 	state := &batch.DispatchState{
-		Data: []*fftypes.Data{
-			{ID: fftypes.NewUUID(), Blob: &fftypes.BlobRef{
+		Data: []*core.Data{
+			{ID: fftypes.NewUUID(), Blob: &core.BlobRef{
 				Hash: blobHash,
 			}},
 		},
 		Pins: []*fftypes.Bytes32{fftypes.NewRandB32()},
 	}
+
+	mom := bm.operations.(*operationmocks.Manager)
+	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(nil)
 
 	mdi := bm.database.(*databasemocks.Plugin)
 	mdi.On("GetBlobMatchingHash", bm.ctx, blobHash).Return(nil, fmt.Errorf("pop"))
@@ -187,6 +192,7 @@ func TestDispatchBatchBlobsFaill(t *testing.T) {
 	assert.EqualError(t, err, "pop")
 
 	mdi.AssertExpectations(t)
+	mom.AssertExpectations(t)
 }
 
 func TestDispatchBatchInsertOpFail(t *testing.T) {
@@ -211,8 +217,8 @@ func TestDispatchBatchUploadFail(t *testing.T) {
 	defer cancel()
 
 	state := &batch.DispatchState{
-		Persisted: fftypes.BatchPersisted{
-			BatchHeader: fftypes.BatchHeader{
+		Persisted: core.BatchPersisted{
+			BatchHeader: core.BatchHeader{
 				ID: fftypes.NewUUID(),
 			},
 		},
@@ -221,9 +227,9 @@ func TestDispatchBatchUploadFail(t *testing.T) {
 
 	mom := bm.operations.(*operationmocks.Manager)
 	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(nil)
-	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *fftypes.PreparedOperation) bool {
+	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *core.PreparedOperation) bool {
 		data := op.Data.(uploadBatchData)
-		return op.Type == fftypes.OpTypeSharedStorageUploadBatch && data.Batch.ID.Equals(state.Persisted.ID)
+		return op.Type == core.OpTypeSharedStorageUploadBatch && data.Batch.ID.Equals(state.Persisted.ID)
 	}), operations.RemainPendingOnFailure).Return(nil, fmt.Errorf("pop"))
 
 	err := bm.dispatchBatch(context.Background(), state)
@@ -237,8 +243,8 @@ func TestDispatchBatchSubmitBatchPinSucceed(t *testing.T) {
 	defer cancel()
 
 	state := &batch.DispatchState{
-		Persisted: fftypes.BatchPersisted{
-			BatchHeader: fftypes.BatchHeader{
+		Persisted: core.BatchPersisted{
+			BatchHeader: core.BatchHeader{
 				ID: fftypes.NewUUID(),
 			},
 		},
@@ -246,20 +252,20 @@ func TestDispatchBatchSubmitBatchPinSucceed(t *testing.T) {
 	}
 
 	mdi := bm.database.(*databasemocks.Plugin)
-	mbp := bm.batchpin.(*batchpinmocks.Submitter)
+	mmp := bm.multiparty.(*multipartymocks.Manager)
 	mom := bm.operations.(*operationmocks.Manager)
 	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(nil)
-	mbp.On("SubmitPinnedBatch", mock.Anything, mock.Anything, mock.Anything, "payload1").Return(nil)
-	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *fftypes.PreparedOperation) bool {
+	mmp.On("SubmitBatchPin", mock.Anything, mock.Anything, mock.Anything, "payload1").Return(nil)
+	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *core.PreparedOperation) bool {
 		data := op.Data.(uploadBatchData)
-		return op.Type == fftypes.OpTypeSharedStorageUploadBatch && data.Batch.ID.Equals(state.Persisted.ID)
+		return op.Type == core.OpTypeSharedStorageUploadBatch && data.Batch.ID.Equals(state.Persisted.ID)
 	}), operations.RemainPendingOnFailure).Return(getUploadBatchOutputs("payload1"), nil)
 
 	err := bm.dispatchBatch(context.Background(), state)
 	assert.NoError(t, err)
 
 	mdi.AssertExpectations(t)
-	mbp.AssertExpectations(t)
+	mmp.AssertExpectations(t)
 	mom.AssertExpectations(t)
 }
 
@@ -268,30 +274,30 @@ func TestDispatchBatchSubmitBroadcastFail(t *testing.T) {
 	defer cancel()
 
 	state := &batch.DispatchState{
-		Persisted: fftypes.BatchPersisted{
-			BatchHeader: fftypes.BatchHeader{
+		Persisted: core.BatchPersisted{
+			BatchHeader: core.BatchHeader{
 				ID:        fftypes.NewUUID(),
-				SignerRef: fftypes.SignerRef{Author: "wrong", Key: "wrong"},
+				SignerRef: core.SignerRef{Author: "wrong", Key: "wrong"},
 			},
 		},
 		Pins: []*fftypes.Bytes32{fftypes.NewRandB32()},
 	}
 
 	mdi := bm.database.(*databasemocks.Plugin)
-	mbp := bm.batchpin.(*batchpinmocks.Submitter)
+	mmp := bm.multiparty.(*multipartymocks.Manager)
 	mom := bm.operations.(*operationmocks.Manager)
 	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(nil)
-	mbp.On("SubmitPinnedBatch", mock.Anything, mock.Anything, mock.Anything, "payload1").Return(fmt.Errorf("pop"))
-	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *fftypes.PreparedOperation) bool {
+	mmp.On("SubmitBatchPin", mock.Anything, mock.Anything, mock.Anything, "payload1").Return(fmt.Errorf("pop"))
+	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *core.PreparedOperation) bool {
 		data := op.Data.(uploadBatchData)
-		return op.Type == fftypes.OpTypeSharedStorageUploadBatch && data.Batch.ID.Equals(state.Persisted.ID)
+		return op.Type == core.OpTypeSharedStorageUploadBatch && data.Batch.ID.Equals(state.Persisted.ID)
 	}), operations.RemainPendingOnFailure).Return(getUploadBatchOutputs("payload1"), nil)
 
 	err := bm.dispatchBatch(context.Background(), state)
 	assert.EqualError(t, err, "pop")
 
 	mdi.AssertExpectations(t)
-	mbp.AssertExpectations(t)
+	mmp.AssertExpectations(t)
 	mom.AssertExpectations(t)
 }
 
@@ -303,7 +309,7 @@ func TestUploadBlobsPublishFail(t *testing.T) {
 	mdi := bm.database.(*databasemocks.Plugin)
 	mom := bm.operations.(*operationmocks.Manager)
 
-	blob := &fftypes.Blob{
+	blob := &core.Blob{
 		Hash:       fftypes.NewRandB32(),
 		PayloadRef: "blob/1",
 	}
@@ -311,15 +317,16 @@ func TestUploadBlobsPublishFail(t *testing.T) {
 
 	ctx := context.Background()
 	mdi.On("GetBlobMatchingHash", ctx, blob.Hash).Return(blob, nil)
-	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *fftypes.PreparedOperation) bool {
+	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(nil)
+	mom.On("RunOperation", mock.Anything, mock.MatchedBy(func(op *core.PreparedOperation) bool {
 		data := op.Data.(uploadBlobData)
-		return op.Type == fftypes.OpTypeSharedStorageUploadBlob && data.Blob == blob
+		return op.Type == core.OpTypeSharedStorageUploadBlob && data.Blob == blob
 	})).Return(nil, fmt.Errorf("pop"))
 
-	err := bm.uploadBlobs(ctx, fftypes.NewUUID(), fftypes.DataArray{
+	err := bm.uploadBlobs(ctx, fftypes.NewUUID(), core.DataArray{
 		{
 			ID: dataID,
-			Blob: &fftypes.BlobRef{
+			Blob: &core.BlobRef{
 				Hash: blob.Hash,
 			},
 		},
@@ -337,7 +344,7 @@ func TestUploadBlobsGetBlobFail(t *testing.T) {
 	defer cancel()
 	mdi := bm.database.(*databasemocks.Plugin)
 
-	blob := &fftypes.Blob{
+	blob := &core.Blob{
 		Hash:       fftypes.NewRandB32(),
 		PayloadRef: "blob/1",
 	}
@@ -346,10 +353,13 @@ func TestUploadBlobsGetBlobFail(t *testing.T) {
 	ctx := context.Background()
 	mdi.On("GetBlobMatchingHash", ctx, blob.Hash).Return(nil, fmt.Errorf("pop"))
 
-	err := bm.uploadBlobs(ctx, fftypes.NewUUID(), fftypes.DataArray{
+	mom := bm.operations.(*operationmocks.Manager)
+	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(nil)
+
+	err := bm.uploadBlobs(ctx, fftypes.NewUUID(), core.DataArray{
 		{
 			ID: dataID,
-			Blob: &fftypes.BlobRef{
+			Blob: &core.BlobRef{
 				Hash: blob.Hash,
 			},
 		},
@@ -357,6 +367,7 @@ func TestUploadBlobsGetBlobFail(t *testing.T) {
 	assert.Regexp(t, "pop", err)
 
 	mdi.AssertExpectations(t)
+	mom.AssertExpectations(t)
 
 }
 
@@ -365,7 +376,7 @@ func TestUploadBlobsGetBlobNotFound(t *testing.T) {
 	defer cancel()
 	mdi := bm.database.(*databasemocks.Plugin)
 
-	blob := &fftypes.Blob{
+	blob := &core.Blob{
 		Hash:       fftypes.NewRandB32(),
 		PayloadRef: "blob/1",
 	}
@@ -374,10 +385,13 @@ func TestUploadBlobsGetBlobNotFound(t *testing.T) {
 	ctx := context.Background()
 	mdi.On("GetBlobMatchingHash", ctx, blob.Hash).Return(nil, nil)
 
-	err := bm.uploadBlobs(ctx, fftypes.NewUUID(), fftypes.DataArray{
+	mom := bm.operations.(*operationmocks.Manager)
+	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(nil)
+
+	err := bm.uploadBlobs(ctx, fftypes.NewUUID(), core.DataArray{
 		{
 			ID: dataID,
-			Blob: &fftypes.BlobRef{
+			Blob: &core.BlobRef{
 				Hash: blob.Hash,
 			},
 		},
@@ -385,5 +399,34 @@ func TestUploadBlobsGetBlobNotFound(t *testing.T) {
 	assert.Regexp(t, "FF10239", err)
 
 	mdi.AssertExpectations(t)
+	mom.AssertExpectations(t)
+
+}
+
+func TestUploadBlobsGetBlobInsertOpFail(t *testing.T) {
+	bm, cancel := newTestBroadcast(t)
+	defer cancel()
+
+	blob := &core.Blob{
+		Hash:       fftypes.NewRandB32(),
+		PayloadRef: "blob/1",
+	}
+	dataID := fftypes.NewUUID()
+	ctx := context.Background()
+
+	mom := bm.operations.(*operationmocks.Manager)
+	mom.On("AddOrReuseOperation", mock.Anything, mock.Anything).Return(fmt.Errorf("pop"))
+
+	err := bm.uploadBlobs(ctx, fftypes.NewUUID(), core.DataArray{
+		{
+			ID: dataID,
+			Blob: &core.BlobRef{
+				Hash: blob.Hash,
+			},
+		},
+	})
+	assert.EqualError(t, err, "pop")
+
+	mom.AssertExpectations(t)
 
 }

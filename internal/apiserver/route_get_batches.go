@@ -19,27 +19,26 @@ package apiserver
 import (
 	"net/http"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 )
 
-var getBatches = &oapispec.Route{
-	Name:   "getBatches",
-	Path:   "namespaces/{ns}/batches",
-	Method: http.MethodGet,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
+var getBatches = &ffapi.Route{
+	Name:            "getBatches",
+	Path:            "batches",
+	Method:          http.MethodGet,
+	PathParams:      nil,
 	QueryParams:     nil,
-	FilterFactory:   database.BatchQueryFactory,
 	Description:     coremsgs.APIEndpointsGetBatches,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return []*fftypes.BatchPersisted{} },
+	JSONOutputValue: func() interface{} { return []*core.BatchPersisted{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		return filterResult(getOr(r.Ctx).GetBatches(r.Ctx, r.PP["ns"], r.Filter))
+	Extensions: &coreExtensions{
+		FilterFactory: database.BatchQueryFactory,
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			return filterResult(cr.or.GetBatches(cr.ctx, cr.filter))
+		},
 	},
 }

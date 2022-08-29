@@ -27,6 +27,7 @@ type Stack struct {
 	BlockchainProvider    string    `json:"blockchainProvider"`
 	TokenProviders        []string  `json:"tokenProviders"`
 	Members               []*Member `json:"members,omitempty"`
+	Database              string    `json:"database"`
 }
 
 type StackState struct {
@@ -35,6 +36,7 @@ type StackState struct {
 
 type Member struct {
 	ExposedFireflyPort   int         `json:"exposedFireflyPort,omitempty"`
+	ExposedAdminPort     int         `json:"exposedFireflyAdminPort,omitempty"`
 	FireflyHostname      string      `json:"fireflyHostname,omitempty"`
 	Username             string      `json:"username,omitempty"`
 	Password             string      `json:"password,omitempty"`
@@ -74,7 +76,7 @@ func GetMemberHostname(filename string, n int) (string, error) {
 	return stack.Members[n].FireflyHostname, nil
 }
 
-func ReadStack(filename string) (*Stack, error) {
+func ReadStackFile(filename string) (*Stack, error) {
 	jsonBytes, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, err
@@ -97,7 +99,7 @@ func ReadStack(filename string) (*Stack, error) {
 	return stack, nil
 }
 
-func ReadStackState(filename string) (*StackState, error) {
+func ReadStackStateFile(filename string) (*StackState, error) {
 	jsonBytes, err := ioutil.ReadFile(filename)
 	if err != nil {
 		return nil, err

@@ -18,39 +18,36 @@ package networkmap
 
 import (
 	"context"
-	"fmt"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
-	"github.com/hyperledger/firefly/pkg/config"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-func (nm *networkMap) RegisterNode(ctx context.Context, waitConfirm bool) (identity *fftypes.Identity, err error) {
+func (nm *networkMap) RegisterNode(ctx context.Context, waitConfirm bool) (identity *core.Identity, err error) {
 
-	nodeOwningOrg, err := nm.identity.GetNodeOwnerOrg(ctx)
+	nodeOwningOrg, err := nm.identity.GetMultipartyRootOrg(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	nodeRequest := &fftypes.IdentityCreateDTO{
+	localNodeName := nm.multiparty.LocalNode().Name
+	if localNodeName == "" {
+		return nil, i18n.NewError(ctx, coremsgs.MsgNodeAndOrgIDMustBeSet)
+	}
+	nodeRequest := &core.IdentityCreateDTO{
 		Parent: nodeOwningOrg.ID.String(),
-		Name:   config.GetString(coreconfig.NodeName),
-		Type:   fftypes.IdentityTypeNode,
-		IdentityProfile: fftypes.IdentityProfile{
-			Description: config.GetString(coreconfig.NodeDescription),
+		Name:   localNodeName,
+		Type:   core.IdentityTypeNode,
+		IdentityProfile: core.IdentityProfile{
+			Description: nm.multiparty.LocalNode().Description,
 		},
 	}
-	if nodeRequest.Name == "" {
-		if nodeOwningOrg.Name != "" {
-			nodeRequest.Name = fmt.Sprintf("%s.node", nodeOwningOrg.Name)
-		}
-	}
 
-	dxInfo, err := nm.exchange.GetEndpointInfo(ctx)
+	nodeRequest.Profile, err = nm.exchange.GetEndpointInfo(ctx, localNodeName)
 	if err != nil {
 		return nil, err
 	}
-	nodeRequest.Profile = dxInfo
 
-	return nm.RegisterIdentity(ctx, fftypes.SystemNamespace, nodeRequest, waitConfirm)
+	return nm.RegisterIdentity(ctx, nodeRequest, waitConfirm)
 }

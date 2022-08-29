@@ -28,13 +28,14 @@ import (
 
 func TestGetIdentityDID(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mnm := &networkmapmocks.Manager{}
 	o.On("NetworkMap").Return(mnm)
 	req := httptest.NewRequest("GET", "/api/v1/namespaces/ns1/identities/id1/did", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mnm.On("GetDIDDocForIndentityByID", mock.Anything, "ns1", "id1").Return(&networkmap.DIDDocument{}, nil, nil)
+	mnm.On("GetDIDDocForIndentityByID", mock.Anything, "id1").Return(&networkmap.DIDDocument{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)

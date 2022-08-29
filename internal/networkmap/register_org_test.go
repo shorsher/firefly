@@ -21,30 +21,31 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
-	"github.com/hyperledger/firefly/mocks/broadcastmocks"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly/internal/multiparty"
+	"github.com/hyperledger/firefly/mocks/definitionsmocks"
 	"github.com/hyperledger/firefly/mocks/identitymanagermocks"
-	"github.com/hyperledger/firefly/pkg/config"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/mocks/multipartymocks"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
-func testOrg(name string) *fftypes.Identity {
-	i := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+func testOrg(name string) *core.Identity {
+	i := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID:        fftypes.NewUUID(),
-			Type:      fftypes.IdentityTypeOrg,
-			Namespace: fftypes.SystemNamespace,
+			Type:      core.IdentityTypeOrg,
+			Namespace: "ns1",
 			Name:      name,
 		},
-		IdentityProfile: fftypes.IdentityProfile{
+		IdentityProfile: core.IdentityProfile{
 			Description: "desc",
 			Profile: fftypes.JSONObject{
 				"some": "profiledata",
 			},
 		},
-		Messages: fftypes.IdentityMessages{
+		Messages: core.IdentityMessages{
 			Claim: fftypes.NewUUID(),
 		},
 	}
@@ -57,29 +58,31 @@ func TestRegisterNodeOrgOk(t *testing.T) {
 	nm, cancel := newTestNetworkmap(t)
 	defer cancel()
 
-	config.Set(coreconfig.OrgName, "org1")
-	config.Set(coreconfig.NodeDescription, "Node 1")
-
 	mim := nm.identity.(*identitymanagermocks.Manager)
-	mim.On("GetNodeOwnerBlockchainKey", nm.ctx).Return(&fftypes.VerifierRef{
+	mim.On("GetMultipartyRootVerifier", nm.ctx).Return(&core.VerifierRef{
 		Value: "0x12345",
 	}, nil)
-	mim.On("VerifyIdentityChain", nm.ctx, mock.AnythingOfType("*fftypes.Identity")).Return(nil, false, nil)
+	mim.On("VerifyIdentityChain", nm.ctx, mock.AnythingOfType("*core.Identity")).Return(nil, false, nil)
 
-	mockMsg := &fftypes.Message{Header: fftypes.MessageHeader{ID: fftypes.NewUUID()}}
-	mbm := nm.broadcast.(*broadcastmocks.Manager)
-	mbm.On("BroadcastIdentityClaim", nm.ctx,
-		fftypes.SystemNamespace,
-		mock.AnythingOfType("*fftypes.IdentityClaim"),
-		mock.MatchedBy(func(sr *fftypes.SignerRef) bool {
+	mmp := nm.multiparty.(*multipartymocks.Manager)
+	mmp.On("RootOrg").Return(multiparty.RootOrg{Name: "org0"})
+
+	mds := nm.defsender.(*definitionsmocks.Sender)
+	mds.On("ClaimIdentity", nm.ctx,
+		mock.AnythingOfType("*core.IdentityClaim"),
+		mock.MatchedBy(func(sr *core.SignerRef) bool {
 			return sr.Key == "0x12345"
 		}),
-		fftypes.SystemTagIdentityClaim, false).Return(mockMsg, nil)
+		(*core.SignerRef)(nil),
+		false).Return(nil)
 
 	org, err := nm.RegisterNodeOrganization(nm.ctx, false)
 	assert.NoError(t, err)
-	assert.Equal(t, *mockMsg.Header.ID, *org.Messages.Claim)
+	assert.NotNil(t, org)
 
+	mim.AssertExpectations(t)
+	mds.AssertExpectations(t)
+	mmp.AssertExpectations(t)
 }
 
 func TestRegisterNodeOrgNoName(t *testing.T) {
@@ -87,18 +90,19 @@ func TestRegisterNodeOrgNoName(t *testing.T) {
 	nm, cancel := newTestNetworkmap(t)
 	defer cancel()
 
-	config.Set(coreconfig.OrgName, "")
-	config.Set(coreconfig.NodeDescription, "")
-
 	mim := nm.identity.(*identitymanagermocks.Manager)
-	mim.On("GetNodeOwnerBlockchainKey", nm.ctx).Return(&fftypes.VerifierRef{
+	mim.On("GetMultipartyRootVerifier", nm.ctx).Return(&core.VerifierRef{
 		Value: "0x12345",
 	}, nil)
-	mim.On("VerifyIdentityChain", nm.ctx, mock.AnythingOfType("*fftypes.Identity")).Return(nil, false, nil)
+
+	mmp := nm.multiparty.(*multipartymocks.Manager)
+	mmp.On("RootOrg").Return(multiparty.RootOrg{Name: ""})
 
 	_, err := nm.RegisterNodeOrganization(nm.ctx, false)
 	assert.Regexp(t, "FF10216", err)
 
+	mim.AssertExpectations(t)
+	mmp.AssertExpectations(t)
 }
 
 func TestRegisterNodeGetOwnerBlockchainKeyFail(t *testing.T) {
@@ -106,11 +110,8 @@ func TestRegisterNodeGetOwnerBlockchainKeyFail(t *testing.T) {
 	nm, cancel := newTestNetworkmap(t)
 	defer cancel()
 
-	config.Set(coreconfig.OrgName, "")
-	config.Set(coreconfig.NodeDescription, "")
-
 	mim := nm.identity.(*identitymanagermocks.Manager)
-	mim.On("GetNodeOwnerBlockchainKey", nm.ctx).Return(nil, fmt.Errorf("pop"))
+	mim.On("GetMultipartyRootVerifier", nm.ctx).Return(nil, fmt.Errorf("pop"))
 
 	_, err := nm.RegisterNodeOrganization(nm.ctx, false)
 	assert.Regexp(t, "pop", err)

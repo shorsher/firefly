@@ -21,22 +21,23 @@ import (
 	"testing"
 
 	"github.com/hyperledger/firefly/mocks/assetmocks"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestGetTokenTransfers(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mam := &assetmocks.Manager{}
 	o.On("Assets").Return(mam)
 	req := httptest.NewRequest("GET", "/api/v1/namespaces/ns1/tokens/transfers", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mam.On("GetTokenTransfers", mock.Anything, "ns1", mock.Anything).
-		Return([]*fftypes.TokenTransfer{}, nil, nil)
+	mam.On("GetTokenTransfers", mock.Anything, mock.Anything).
+		Return([]*core.TokenTransfer{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)
@@ -44,16 +45,17 @@ func TestGetTokenTransfers(t *testing.T) {
 
 func TestGetTokenTransfersFromOrTo(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mam := &assetmocks.Manager{}
 	o.On("Assets").Return(mam)
 	req := httptest.NewRequest("GET", "/api/v1/namespaces/ns1/tokens/transfers?fromOrTo=0x1", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mam.On("GetTokenTransfers", mock.Anything, "ns1", mock.MatchedBy(func(filter database.AndFilter) bool {
+	mam.On("GetTokenTransfers", mock.Anything, mock.MatchedBy(func(filter database.AndFilter) bool {
 		info, _ := filter.Finalize()
 		return info.String() == "( ( from == '0x1' ) || ( to == '0x1' ) )"
-	})).Return([]*fftypes.TokenTransfer{}, nil, nil)
+	})).Return([]*core.TokenTransfer{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)

@@ -21,11 +21,12 @@ import (
 	"database/sql"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 var (
@@ -44,22 +45,21 @@ var (
 
 const verifiersTable = "verifiers"
 
-func (s *SQLCommon) attemptVerifierUpdate(ctx context.Context, tx *txWrapper, verifier *fftypes.Verifier) (int64, error) {
+func (s *SQLCommon) attemptVerifierUpdate(ctx context.Context, tx *txWrapper, verifier *core.Verifier) (int64, error) {
 	return s.updateTx(ctx, verifiersTable, tx,
 		sq.Update(verifiersTable).
 			Set("identity", verifier.Identity).
 			Set("vtype", verifier.Type).
-			Set("namespace", verifier.Namespace).
 			Set("value", verifier.Value).
 			Where(sq.Eq{
 				"hash": verifier.Hash,
 			}),
 		func() {
-			s.callbacks.HashCollectionNSEvent(database.CollectionVerifiers, fftypes.ChangeEventTypeUpdated, verifier.Namespace, verifier.Hash)
+			s.callbacks.HashCollectionNSEvent(database.CollectionVerifiers, core.ChangeEventTypeUpdated, verifier.Namespace, verifier.Hash)
 		})
 }
 
-func (s *SQLCommon) attemptVerifierInsert(ctx context.Context, tx *txWrapper, verifier *fftypes.Verifier, requestConflictEmptyResult bool) (err error) {
+func (s *SQLCommon) attemptVerifierInsert(ctx context.Context, tx *txWrapper, verifier *core.Verifier, requestConflictEmptyResult bool) (err error) {
 	verifier.Created = fftypes.Now()
 	_, err = s.insertTxExt(ctx, verifiersTable, tx,
 		sq.Insert(verifiersTable).
@@ -73,12 +73,12 @@ func (s *SQLCommon) attemptVerifierInsert(ctx context.Context, tx *txWrapper, ve
 				verifier.Created,
 			),
 		func() {
-			s.callbacks.HashCollectionNSEvent(database.CollectionVerifiers, fftypes.ChangeEventTypeCreated, verifier.Namespace, verifier.Hash)
+			s.callbacks.HashCollectionNSEvent(database.CollectionVerifiers, core.ChangeEventTypeCreated, verifier.Namespace, verifier.Hash)
 		}, requestConflictEmptyResult)
 	return err
 }
 
-func (s *SQLCommon) UpsertVerifier(ctx context.Context, verifier *fftypes.Verifier, optimization database.UpsertOptimization) (err error) {
+func (s *SQLCommon) UpsertVerifier(ctx context.Context, verifier *core.Verifier, optimization database.UpsertOptimization) (err error) {
 	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
 	if err != nil {
 		return err
@@ -99,7 +99,10 @@ func (s *SQLCommon) UpsertVerifier(ctx context.Context, verifier *fftypes.Verifi
 		msgRows, _, err := s.queryTx(ctx, verifiersTable, tx,
 			sq.Select("hash").
 				From(verifiersTable).
-				Where(sq.Eq{"hash": verifier.Hash}),
+				Where(sq.Eq{
+					"namespace": verifier.Namespace,
+					"hash":      verifier.Hash,
+				}),
 		)
 		if err != nil {
 			return err
@@ -122,8 +125,8 @@ func (s *SQLCommon) UpsertVerifier(ctx context.Context, verifier *fftypes.Verifi
 	return s.commitTx(ctx, tx, autoCommit)
 }
 
-func (s *SQLCommon) verifierResult(ctx context.Context, row *sql.Rows) (*fftypes.Verifier, error) {
-	verifier := fftypes.Verifier{}
+func (s *SQLCommon) verifierResult(ctx context.Context, row *sql.Rows) (*core.Verifier, error) {
+	verifier := core.Verifier{}
 	err := row.Scan(
 		&verifier.Hash,
 		&verifier.Identity,
@@ -138,7 +141,7 @@ func (s *SQLCommon) verifierResult(ctx context.Context, row *sql.Rows) (*fftypes
 	return &verifier, nil
 }
 
-func (s *SQLCommon) getVerifierPred(ctx context.Context, desc string, pred interface{}) (verifier *fftypes.Verifier, err error) {
+func (s *SQLCommon) getVerifierPred(ctx context.Context, desc string, pred interface{}) (verifier *core.Verifier, err error) {
 
 	rows, _, err := s.query(ctx, verifiersTable,
 		sq.Select(verifierColumns...).
@@ -158,17 +161,17 @@ func (s *SQLCommon) getVerifierPred(ctx context.Context, desc string, pred inter
 	return s.verifierResult(ctx, rows)
 }
 
-func (s *SQLCommon) GetVerifierByValue(ctx context.Context, vType fftypes.VerifierType, namespace, value string) (verifier *fftypes.Verifier, err error) {
+func (s *SQLCommon) GetVerifierByValue(ctx context.Context, vType core.VerifierType, namespace, value string) (verifier *core.Verifier, err error) {
 	return s.getVerifierPred(ctx, value, sq.Eq{"vtype": vType, "namespace": namespace, "value": value})
 }
 
-func (s *SQLCommon) GetVerifierByHash(ctx context.Context, hash *fftypes.Bytes32) (verifier *fftypes.Verifier, err error) {
-	return s.getVerifierPred(ctx, hash.String(), sq.Eq{"hash": hash})
+func (s *SQLCommon) GetVerifierByHash(ctx context.Context, namespace string, hash *fftypes.Bytes32) (verifier *core.Verifier, err error) {
+	return s.getVerifierPred(ctx, hash.String(), sq.Eq{"hash": hash, "namespace": namespace})
 }
 
-func (s *SQLCommon) GetVerifiers(ctx context.Context, filter database.Filter) (verifiers []*fftypes.Verifier, fr *database.FilterResult, err error) {
+func (s *SQLCommon) GetVerifiers(ctx context.Context, namespace string, filter database.Filter) (verifiers []*core.Verifier, fr *database.FilterResult, err error) {
 
-	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(verifierColumns...).From(verifiersTable), filter, verifierFilterFieldMap, []interface{}{"sequence"})
+	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(verifierColumns...).From(verifiersTable), filter, verifierFilterFieldMap, []interface{}{"sequence"}, sq.Eq{"namespace": namespace})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -179,7 +182,7 @@ func (s *SQLCommon) GetVerifiers(ctx context.Context, filter database.Filter) (v
 	}
 	defer rows.Close()
 
-	verifiers = []*fftypes.Verifier{}
+	verifiers = []*core.Verifier{}
 	for rows.Next() {
 		d, err := s.verifierResult(ctx, rows)
 		if err != nil {
@@ -190,26 +193,4 @@ func (s *SQLCommon) GetVerifiers(ctx context.Context, filter database.Filter) (v
 
 	return verifiers, s.queryRes(ctx, verifiersTable, tx, fop, fi), err
 
-}
-
-func (s *SQLCommon) UpdateVerifier(ctx context.Context, hash *fftypes.Bytes32, update database.Update) (err error) {
-
-	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer s.rollbackTx(ctx, tx, autoCommit)
-
-	query, err := s.buildUpdate(sq.Update(verifiersTable), update, verifierFilterFieldMap)
-	if err != nil {
-		return err
-	}
-	query = query.Where(sq.Eq{"hash": hash})
-
-	_, err = s.updateTx(ctx, verifiersTable, tx, query, nil /* no change events for filter based updates */)
-	if err != nil {
-		return err
-	}
-
-	return s.commitTx(ctx, tx, autoCommit)
 }

@@ -22,8 +22,8 @@ func (_m *DXEvent) AckWithManifest(manifest string) {
 	_m.Called(manifest)
 }
 
-// ID provides a mock function with given fields:
-func (_m *DXEvent) ID() string {
+// EventID provides a mock function with given fields:
+func (_m *DXEvent) EventID() string {
 	ret := _m.Called()
 
 	var r0 string
@@ -62,22 +62,6 @@ func (_m *DXEvent) PrivateBlobReceived() *dataexchange.PrivateBlobReceived {
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*dataexchange.PrivateBlobReceived)
-		}
-	}
-
-	return r0
-}
-
-// TransferResult provides a mock function with given fields:
-func (_m *DXEvent) TransferResult() *dataexchange.TransferResult {
-	ret := _m.Called()
-
-	var r0 *dataexchange.TransferResult
-	if rf, ok := ret.Get(0).(func() *dataexchange.TransferResult); ok {
-		r0 = rf()
-	} else {
-		if ret.Get(0) != nil {
-			r0 = ret.Get(0).(*dataexchange.TransferResult)
 		}
 	}
 

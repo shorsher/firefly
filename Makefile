@@ -23,22 +23,25 @@ lint: ${LINT}
 ${MOCKERY}:
 		$(VGO) install github.com/vektra/mockery/cmd/mockery@latest
 ${LINT}:
-		$(VGO) install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+		$(VGO) install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.47.3
+ffcommon:
+		$(eval WSCLIENT_PATH := $(shell $(VGO) list -f '{{.Dir}}' github.com/hyperledger/firefly-common/pkg/wsclient))
 
 
 define makemock
 mocks: mocks-$(strip $(1))-$(strip $(2))
-mocks-$(strip $(1))-$(strip $(2)): ${MOCKERY}
+mocks-$(strip $(1))-$(strip $(2)): ${MOCKERY} ffcommon
 	${MOCKERY} --case underscore --dir $(1) --name $(2) --outpkg $(3) --output mocks/$(strip $(3))
 endef
 
+$(eval $(call makemock, $$(WSCLIENT_PATH),         WSClient,           wsmocks))
 $(eval $(call makemock, pkg/blockchain,            Plugin,             blockchainmocks))
 $(eval $(call makemock, pkg/blockchain,            Callbacks,          blockchainmocks))
+$(eval $(call makemock, pkg/core,                  OperationCallbacks, coremocks))
 $(eval $(call makemock, pkg/database,              Plugin,             databasemocks))
 $(eval $(call makemock, pkg/database,              Callbacks,          databasemocks))
 $(eval $(call makemock, pkg/sharedstorage,         Plugin,             sharedstoragemocks))
 $(eval $(call makemock, pkg/sharedstorage,         Callbacks,          sharedstoragemocks))
-$(eval $(call makemock, pkg/events,                Plugin,             eventsmocks))
 $(eval $(call makemock, pkg/events,                Plugin,             eventsmocks))
 $(eval $(call makemock, pkg/events,                Callbacks,          eventsmocks))
 $(eval $(call makemock, pkg/identity,              Plugin,             identitymocks))
@@ -48,14 +51,9 @@ $(eval $(call makemock, pkg/dataexchange,          DXEvent,            dataexcha
 $(eval $(call makemock, pkg/dataexchange,          Callbacks,          dataexchangemocks))
 $(eval $(call makemock, pkg/tokens,                Plugin,             tokenmocks))
 $(eval $(call makemock, pkg/tokens,                Callbacks,          tokenmocks))
-$(eval $(call makemock, pkg/wsclient,              WSClient,           wsmocks))
-$(eval $(call makemock, pkg/httpserver,            GoHTTPServer,       httpservermocks))
 $(eval $(call makemock, internal/txcommon,         Helper,             txcommonmocks))
 $(eval $(call makemock, internal/identity,         Manager,            identitymanagermocks))
-$(eval $(call makemock, internal/batchpin,         Submitter,          batchpinmocks))
-$(eval $(call makemock, internal/sysmessaging,     SystemEvents,       sysmessagingmocks))
-$(eval $(call makemock, internal/sysmessaging,     MessageSender,      sysmessagingmocks))
-$(eval $(call makemock, internal/sysmessaging,     LocalNodeInfo,      sysmessagingmocks))
+$(eval $(call makemock, internal/syncasync,        Sender,             syncasyncmocks))
 $(eval $(call makemock, internal/syncasync,        Bridge,             syncasyncmocks))
 $(eval $(call makemock, internal/data,             Manager,            datamocks))
 $(eval $(call makemock, internal/batch,            Manager,            batchmocks))
@@ -63,17 +61,21 @@ $(eval $(call makemock, internal/broadcast,        Manager,            broadcast
 $(eval $(call makemock, internal/privatemessaging, Manager,            privatemessagingmocks))
 $(eval $(call makemock, internal/shareddownload,   Manager,            shareddownloadmocks))
 $(eval $(call makemock, internal/shareddownload,   Callbacks,          shareddownloadmocks))
-$(eval $(call makemock, internal/definitions,      DefinitionHandlers, definitionsmocks))
+$(eval $(call makemock, internal/definitions,      Handler,            definitionsmocks))
+$(eval $(call makemock, internal/definitions,      Sender,             definitionsmocks))
 $(eval $(call makemock, internal/events,           EventManager,       eventmocks))
+$(eval $(call makemock, internal/events/system,    EventInterface,     systemeventmocks))
+$(eval $(call makemock, internal/namespace,        Manager,            namespacemocks))
 $(eval $(call makemock, internal/networkmap,       Manager,            networkmapmocks))
 $(eval $(call makemock, internal/assets,           Manager,            assetmocks))
 $(eval $(call makemock, internal/contracts,        Manager,            contractmocks))
-$(eval $(call makemock, internal/adminevents,      Manager,            admineventsmocks))
-$(eval $(call makemock, internal/oapiffi,          FFISwaggerGen,      oapiffimocks))
+$(eval $(call makemock, internal/spievents,        Manager,            spieventsmocks))
 $(eval $(call makemock, internal/orchestrator,     Orchestrator,       orchestratormocks))
+$(eval $(call makemock, internal/apiserver,        FFISwaggerGen,      apiservermocks))
 $(eval $(call makemock, internal/apiserver,        Server,             apiservermocks))
 $(eval $(call makemock, internal/metrics,          Manager,            metricsmocks))
 $(eval $(call makemock, internal/operations,       Manager,            operationmocks))
+$(eval $(call makemock, internal/multiparty,       Manager,            multipartymocks))
 
 firefly-nocgo: ${GOFILES}
 		CGO_ENABLED=0 $(VGO) build -o ${BINARY_NAME}-nocgo -ldflags "-X main.buildDate=$(DATE) -X main.buildVersion=$(BUILD_VERSION) -X 'github.com/hyperledger/firefly/cmd.BuildVersionOverride=$(BUILD_VERSION)' -X 'github.com/hyperledger/firefly/cmd.BuildDate=$(DATE)' -X 'github.com/hyperledger/firefly/cmd.BuildCommit=$(GIT_REF)'" -tags=prod -tags=prod -v
@@ -93,8 +95,10 @@ clean:
 deps:
 		$(VGO) get
 reference:
-		$(VGO) test ./internal/apiserver ./docs -timeout=10s -tags reference
+		$(VGO) test ./internal/apiserver ./internal/reference ./docs -timeout=10s -tags reference
 manifest:
 		./manifestgen.sh
 docker:
 		./docker_build.sh $(DOCKER_ARGS)
+docs: .ALWAYS
+		cd docs && bundle install && bundle exec jekyll build && bundle exec htmlproofer --disable-external --allow-hash-href --assume-extension ./_site --url-swap '^/firefly/:/' --url-ignore /127.0.0.1/,/localhost/

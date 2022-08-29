@@ -19,24 +19,25 @@ package apiserver
 import (
 	"net/http"
 
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var getNamespaces = &oapispec.Route{
+var getNamespaces = &ffapi.Route{
 	Name:            "getNamespaces",
 	Path:            "namespaces",
 	Method:          http.MethodGet,
 	PathParams:      nil,
 	QueryParams:     nil,
-	FilterFactory:   database.NamespaceQueryFactory,
 	Description:     coremsgs.APIEndpointsGetNamespaces,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return []*fftypes.Namespace{} },
+	JSONOutputValue: func() interface{} { return []*core.Namespace{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		return filterResult(getOr(r.Ctx).GetNamespaces(r.Ctx, r.Filter))
+	Extensions: &coreExtensions{
+		FilterFactory: nil,
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			return cr.mgr.GetNamespaces(cr.ctx)
+		},
 	},
 }

@@ -21,11 +21,12 @@ import (
 	"database/sql"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 var (
@@ -54,7 +55,10 @@ func (s *SQLCommon) UpsertFFI(ctx context.Context, ffi *fftypes.FFI) (err error)
 	rows, _, err := s.queryTx(ctx, ffiTable, tx,
 		sq.Select("id").
 			From(ffiTable).
-			Where(sq.And{sq.Eq{"id": ffi.ID}}),
+			Where(sq.Eq{
+				"namespace": ffi.Namespace,
+				"id":        ffi.ID,
+			}),
 	)
 	if err != nil {
 		return err
@@ -65,13 +69,12 @@ func (s *SQLCommon) UpsertFFI(ctx context.Context, ffi *fftypes.FFI) (err error)
 	if existing {
 		if _, err = s.updateTx(ctx, ffiTable, tx,
 			sq.Update(ffiTable).
-				Set("namespace", ffi.Namespace).
 				Set("name", ffi.Name).
 				Set("version", ffi.Version).
 				Set("description", ffi.Description).
 				Set("message_id", ffi.Message),
 			func() {
-				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIs, fftypes.ChangeEventTypeUpdated, ffi.Namespace, ffi.ID)
+				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIs, core.ChangeEventTypeUpdated, ffi.Namespace, ffi.ID)
 			},
 		); err != nil {
 			return err
@@ -89,7 +92,7 @@ func (s *SQLCommon) UpsertFFI(ctx context.Context, ffi *fftypes.FFI) (err error)
 					ffi.Message,
 				),
 			func() {
-				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIs, fftypes.ChangeEventTypeCreated, ffi.Namespace, ffi.ID)
+				s.callbacks.UUIDCollectionNSEvent(database.CollectionFFIs, core.ChangeEventTypeCreated, ffi.Namespace, ffi.ID)
 			},
 		); err != nil {
 			return err
@@ -139,9 +142,10 @@ func (s *SQLCommon) getFFIPred(ctx context.Context, desc string, pred interface{
 	return ffi, nil
 }
 
-func (s *SQLCommon) GetFFIs(ctx context.Context, ns string, filter database.Filter) (ffis []*fftypes.FFI, res *database.FilterResult, err error) {
+func (s *SQLCommon) GetFFIs(ctx context.Context, namespace string, filter database.Filter) (ffis []*fftypes.FFI, res *database.FilterResult, err error) {
 
-	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(ffiColumns...).From(ffiTable).Where(sq.Eq{"namespace": ns}), filter, ffiFilterFieldMap, []interface{}{"sequence"})
+	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(ffiColumns...).From(ffiTable),
+		filter, ffiFilterFieldMap, []interface{}{"sequence"}, sq.Eq{"namespace": namespace})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -165,10 +169,10 @@ func (s *SQLCommon) GetFFIs(ctx context.Context, ns string, filter database.Filt
 
 }
 
-func (s *SQLCommon) GetFFIByID(ctx context.Context, id *fftypes.UUID) (*fftypes.FFI, error) {
-	return s.getFFIPred(ctx, id.String(), sq.Eq{"id": id})
+func (s *SQLCommon) GetFFIByID(ctx context.Context, namespace string, id *fftypes.UUID) (*fftypes.FFI, error) {
+	return s.getFFIPred(ctx, id.String(), sq.Eq{"id": id, "namespace": namespace})
 }
 
-func (s *SQLCommon) GetFFI(ctx context.Context, ns, name, version string) (*fftypes.FFI, error) {
-	return s.getFFIPred(ctx, ns+":"+name+":"+version, sq.And{sq.Eq{"namespace": ns}, sq.Eq{"name": name}, sq.Eq{"version": version}})
+func (s *SQLCommon) GetFFI(ctx context.Context, namespace, name, version string) (*fftypes.FFI, error) {
+	return s.getFFIPred(ctx, namespace+":"+name+":"+version, sq.Eq{"namespace": namespace, "name": name, "version": version})
 }

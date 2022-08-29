@@ -23,8 +23,9 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,7 +35,7 @@ func TestBlockchainEventsE2EWithDB(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a new contract event entry
-	event := &fftypes.BlockchainEvent{
+	event := &core.BlockchainEvent{
 		ID:         fftypes.NewUUID(),
 		Namespace:  "ns",
 		Listener:   fftypes.NewUUID(),
@@ -43,14 +44,14 @@ func TestBlockchainEventsE2EWithDB(t *testing.T) {
 		Output:     fftypes.JSONObject{"value": 1},
 		Info:       fftypes.JSONObject{"blockNumber": 1},
 		Timestamp:  fftypes.Now(),
-		TX: fftypes.BlockchainTransactionRef{
+		TX: core.BlockchainTransactionRef{
 			ID:           fftypes.NewUUID(),
-			Type:         fftypes.TransactionTypeBatchPin,
+			Type:         core.TransactionTypeBatchPin,
 			BlockchainID: "0x12345",
 		},
 	}
 
-	s.callbacks.On("UUIDCollectionNSEvent", database.CollectionBlockchainEvents, fftypes.ChangeEventTypeCreated, "ns", event.ID).Return()
+	s.callbacks.On("UUIDCollectionNSEvent", database.CollectionBlockchainEvents, core.ChangeEventTypeCreated, "ns", event.ID).Return()
 
 	err := s.InsertBlockchainEvent(ctx, event)
 	assert.NotNil(t, event.Timestamp)
@@ -63,7 +64,7 @@ func TestBlockchainEventsE2EWithDB(t *testing.T) {
 		fb.Eq("name", "Changed"),
 		fb.Eq("listener", event.Listener),
 	)
-	events, res, err := s.GetBlockchainEvents(ctx, filter.Count(true))
+	events, res, err := s.GetBlockchainEvents(ctx, "ns", filter.Count(true))
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(events))
 	assert.Equal(t, int64(1), *res.TotalCount)
@@ -71,7 +72,7 @@ func TestBlockchainEventsE2EWithDB(t *testing.T) {
 	assert.Equal(t, string(eventJson), string(eventReadJson))
 
 	// Query back the event (by ID)
-	eventRead, err := s.GetBlockchainEventByID(ctx, event.ID)
+	eventRead, err := s.GetBlockchainEventByID(ctx, "ns", event.ID)
 	assert.NoError(t, err)
 	eventReadJson, _ = json.Marshal(eventRead)
 	assert.Equal(t, string(eventJson), string(eventReadJson))
@@ -86,7 +87,7 @@ func TestBlockchainEventsE2EWithDB(t *testing.T) {
 func TestInsertBlockchainEventFailBegin(t *testing.T) {
 	s, mock := newMockProvider().init()
 	mock.ExpectBegin().WillReturnError(fmt.Errorf("pop"))
-	err := s.InsertBlockchainEvent(context.Background(), &fftypes.BlockchainEvent{})
+	err := s.InsertBlockchainEvent(context.Background(), &core.BlockchainEvent{})
 	assert.Regexp(t, "FF10114", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -96,7 +97,7 @@ func TestInsertBlockchainEventFailInsert(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT .*").WillReturnError(fmt.Errorf("pop"))
 	mock.ExpectRollback()
-	err := s.InsertBlockchainEvent(context.Background(), &fftypes.BlockchainEvent{})
+	err := s.InsertBlockchainEvent(context.Background(), &core.BlockchainEvent{})
 	assert.Regexp(t, "FF10116", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -106,7 +107,7 @@ func TestInsertBlockchainEventFailCommit(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec("INSERT .*").WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit().WillReturnError(fmt.Errorf("pop"))
-	err := s.InsertBlockchainEvent(context.Background(), &fftypes.BlockchainEvent{})
+	err := s.InsertBlockchainEvent(context.Background(), &core.BlockchainEvent{})
 	assert.Regexp(t, "FF10119", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -114,7 +115,7 @@ func TestInsertBlockchainEventFailCommit(t *testing.T) {
 func TestGetBlockchainEventByIDSelectFail(t *testing.T) {
 	s, mock := newMockProvider().init()
 	mock.ExpectQuery("SELECT .*").WillReturnError(fmt.Errorf("pop"))
-	_, err := s.GetBlockchainEventByID(context.Background(), fftypes.NewUUID())
+	_, err := s.GetBlockchainEventByID(context.Background(), "ns", fftypes.NewUUID())
 	assert.Regexp(t, "FF10115", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -122,7 +123,7 @@ func TestGetBlockchainEventByIDSelectFail(t *testing.T) {
 func TestGetBlockchainEventByIDNotFound(t *testing.T) {
 	s, mock := newMockProvider().init()
 	mock.ExpectQuery("SELECT .*").WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	msg, err := s.GetBlockchainEventByID(context.Background(), fftypes.NewUUID())
+	msg, err := s.GetBlockchainEventByID(context.Background(), "ns", fftypes.NewUUID())
 	assert.NoError(t, err)
 	assert.Nil(t, msg)
 	assert.NoError(t, mock.ExpectationsWereMet())
@@ -131,7 +132,7 @@ func TestGetBlockchainEventByIDNotFound(t *testing.T) {
 func TestGetBlockchainEventByIDScanFail(t *testing.T) {
 	s, mock := newMockProvider().init()
 	mock.ExpectQuery("SELECT .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("only one"))
-	_, err := s.GetBlockchainEventByID(context.Background(), fftypes.NewUUID())
+	_, err := s.GetBlockchainEventByID(context.Background(), "ns", fftypes.NewUUID())
 	assert.Regexp(t, "FF10121", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -140,7 +141,7 @@ func TestGetBlockchainEventsQueryFail(t *testing.T) {
 	s, mock := newMockProvider().init()
 	mock.ExpectQuery("SELECT .*").WillReturnError(fmt.Errorf("pop"))
 	f := database.BlockchainEventQueryFactory.NewFilter(context.Background()).Eq("id", "")
-	_, _, err := s.GetBlockchainEvents(context.Background(), f)
+	_, _, err := s.GetBlockchainEvents(context.Background(), "ns", f)
 	assert.Regexp(t, "FF10115", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -148,7 +149,7 @@ func TestGetBlockchainEventsQueryFail(t *testing.T) {
 func TestGetBlockchainEventsBuildQueryFail(t *testing.T) {
 	s, _ := newMockProvider().init()
 	f := database.BlockchainEventQueryFactory.NewFilter(context.Background()).Eq("id", map[bool]bool{true: false})
-	_, _, err := s.GetBlockchainEvents(context.Background(), f)
+	_, _, err := s.GetBlockchainEvents(context.Background(), "ns", f)
 	assert.Regexp(t, "FF00143.*id", err)
 }
 
@@ -156,7 +157,7 @@ func TestGetBlockchainEventsScanFail(t *testing.T) {
 	s, mock := newMockProvider().init()
 	mock.ExpectQuery("SELECT .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("only one"))
 	f := database.BlockchainEventQueryFactory.NewFilter(context.Background()).Eq("id", "")
-	_, _, err := s.GetBlockchainEvents(context.Background(), f)
+	_, _, err := s.GetBlockchainEvents(context.Background(), "ns", f)
 	assert.Regexp(t, "FF10121", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

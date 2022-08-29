@@ -20,9 +20,10 @@ import (
 	"context"
 	"sync"
 
-	"github.com/hyperledger/firefly/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/events"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 )
 
 const (
@@ -34,62 +35,69 @@ const (
 type Events struct {
 	ctx          context.Context
 	capabilities *events.Capabilities
-	callbacks    events.Callbacks
+	callbacks    map[string]events.Callbacks
 	mux          sync.Mutex
 	listeners    map[string][]EventListener
 	connID       string
 	readAhead    uint16
 }
 
-type EventListener func(event *fftypes.EventDelivery) error
+type EventInterface interface {
+	AddSystemEventListener(ns string, el EventListener) error
+}
+
+type EventListener func(event *core.EventDelivery) error
 
 func (se *Events) Name() string { return SystemEventsTransport }
 
-func (se *Events) Init(ctx context.Context, prefix config.Prefix, callbacks events.Callbacks) (err error) {
+func (se *Events) Init(ctx context.Context, config config.Section) (err error) {
 	*se = Events{
 		ctx:          ctx,
 		capabilities: &events.Capabilities{},
-		callbacks:    callbacks,
+		callbacks:    make(map[string]events.Callbacks),
 		listeners:    make(map[string][]EventListener),
-		readAhead:    uint16(prefix.GetInt(SystemEventsConfReadAhead)),
+		readAhead:    uint16(config.GetInt(SystemEventsConfReadAhead)),
 		connID:       fftypes.ShortID(),
 	}
+	return nil
+}
+
+func (se *Events) SetHandler(namespace string, handler events.Callbacks) error {
+	se.callbacks[namespace] = handler
 	// We have a single logical connection, that matches all subscriptions
-	return callbacks.RegisterConnection(se.connID, func(sr fftypes.SubscriptionRef) bool { return true })
+	return handler.RegisterConnection(se.connID, func(sr core.SubscriptionRef) bool { return true })
 }
 
 func (se *Events) Capabilities() *events.Capabilities {
 	return se.capabilities
 }
 
-func (se *Events) GetOptionsSchema(ctx context.Context) string {
-	return `{}`
-}
-
-func (se *Events) ValidateOptions(options *fftypes.SubscriptionOptions) error {
+func (se *Events) ValidateOptions(options *core.SubscriptionOptions) error {
 	return nil
 }
 
 func (se *Events) AddListener(ns string, el EventListener) error {
 	no := false
-	newest := fftypes.SubOptsFirstEventNewest
-	err := se.callbacks.EphemeralSubscription(se.connID, ns, &fftypes.SubscriptionFilter{ /* all events */ }, &fftypes.SubscriptionOptions{
-		SubscriptionCoreOptions: fftypes.SubscriptionCoreOptions{
-			WithData:   &no,
-			ReadAhead:  &se.readAhead,
-			FirstEvent: &newest,
-		},
-	})
-	if err != nil {
-		return err
+	newest := core.SubOptsFirstEventNewest
+	if cb, ok := se.callbacks[ns]; ok {
+		err := cb.EphemeralSubscription(se.connID, ns, &core.SubscriptionFilter{ /* all events */ }, &core.SubscriptionOptions{
+			SubscriptionCoreOptions: core.SubscriptionCoreOptions{
+				WithData:   &no,
+				ReadAhead:  &se.readAhead,
+				FirstEvent: &newest,
+			},
+		})
+		if err != nil {
+			return err
+		}
+		se.mux.Lock()
+		se.listeners[ns] = append(se.listeners[ns], el)
+		se.mux.Unlock()
 	}
-	se.mux.Lock()
-	se.listeners[ns] = append(se.listeners[ns], el)
-	se.mux.Unlock()
 	return nil
 }
 
-func (se *Events) DeliveryRequest(connID string, sub *fftypes.Subscription, event *fftypes.EventDelivery, data fftypes.DataArray) error {
+func (se *Events) DeliveryRequest(connID string, sub *core.Subscription, event *core.EventDelivery, data core.DataArray) error {
 	se.mux.Lock()
 	defer se.mux.Unlock()
 	for ns, listeners := range se.listeners {
@@ -101,11 +109,13 @@ func (se *Events) DeliveryRequest(connID string, sub *fftypes.Subscription, even
 			}
 		}
 	}
-	se.callbacks.DeliveryResponse(connID, &fftypes.EventDeliveryResponse{
-		ID:           event.ID,
-		Rejected:     false,
-		Subscription: event.Subscription,
-		Reply:        nil,
-	})
+	if cb, ok := se.callbacks[sub.Namespace]; ok {
+		cb.DeliveryResponse(connID, &core.EventDeliveryResponse{
+			ID:           event.ID,
+			Rejected:     false,
+			Subscription: event.Subscription,
+			Reply:        nil,
+		})
+	}
 	return nil
 }

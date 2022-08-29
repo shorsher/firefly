@@ -19,27 +19,29 @@ package apiserver
 import (
 	"net/http"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/internal/orchestrator"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var postNewMessageRequestReply = &oapispec.Route{
-	Name:   "postNewMessageRequestReply",
-	Path:   "namespaces/{ns}/messages/requestreply",
-	Method: http.MethodPost,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
+var postNewMessageRequestReply = &ffapi.Route{
+	Name:            "postNewMessageRequestReply",
+	Path:            "messages/requestreply",
+	Method:          http.MethodPost,
+	PathParams:      nil,
 	QueryParams:     nil,
-	FilterFactory:   nil,
 	Description:     coremsgs.APIEndpointsPostNewMessageRequestReply,
-	JSONInputValue:  func() interface{} { return &fftypes.MessageInOut{} },
-	JSONOutputValue: func() interface{} { return &fftypes.MessageInOut{} },
+	JSONInputValue:  func() interface{} { return &core.MessageInOut{} },
+	JSONOutputValue: func() interface{} { return &core.MessageInOut{} },
 	JSONOutputCodes: []int{http.StatusOK}, // Sync operation
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		output, err = getOr(r.Ctx).RequestReply(r.Ctx, r.PP["ns"], r.Input.(*fftypes.MessageInOut))
-		return output, err
+	Extensions: &coreExtensions{
+		EnabledIf: func(or orchestrator.Orchestrator) bool {
+			return or.PrivateMessaging() != nil
+		},
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			output, err = cr.or.RequestReply(cr.ctx, r.Input.(*core.MessageInOut))
+			return output, err
+		},
 	},
 }

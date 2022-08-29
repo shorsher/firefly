@@ -17,73 +17,50 @@
 package orchestrator
 
 import (
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 )
 
-func (or *orchestrator) OrderedUUIDCollectionNSEvent(resType database.OrderedUUIDCollectionNS, eventType fftypes.ChangeEventType, ns string, id *fftypes.UUID, sequence int64) {
+func (or *orchestrator) OrderedUUIDCollectionNSEvent(resType database.OrderedUUIDCollectionNS, eventType core.ChangeEventType, ns string, id *fftypes.UUID, sequence int64) {
+	if ns != or.namespace.LocalName {
+		log.L(or.ctx).Debugf("Ignoring database event from different namespace '%s'", ns)
+		return
+	}
 	switch {
-	case eventType == fftypes.ChangeEventTypeCreated && resType == database.CollectionMessages:
+	case eventType == core.ChangeEventTypeCreated && resType == database.CollectionMessages:
 		or.batch.NewMessages() <- sequence
-	case eventType == fftypes.ChangeEventTypeCreated && resType == database.CollectionEvents:
+	case eventType == core.ChangeEventTypeCreated && resType == database.CollectionEvents:
 		or.events.NewEvents() <- sequence
 	}
-	var ces *int64
-	if eventType == fftypes.ChangeEventTypeCreated {
-		// Sequence is only provided on create events
-		ces = &sequence
-	}
-	or.adminEvents.Dispatch(&fftypes.ChangeEvent{
-		Collection: string(resType),
-		Type:       eventType,
-		Namespace:  ns,
-		ID:         id,
-		Sequence:   ces,
-	})
 }
 
-func (or *orchestrator) OrderedCollectionEvent(resType database.OrderedCollection, eventType fftypes.ChangeEventType, sequence int64) {
-	if eventType == fftypes.ChangeEventTypeCreated && resType == database.CollectionPins {
+func (or *orchestrator) OrderedCollectionNSEvent(resType database.OrderedCollectionNS, eventType core.ChangeEventType, ns string, sequence int64) {
+	if ns != or.namespace.LocalName {
+		log.L(or.ctx).Debugf("Ignoring database event from different namespace '%s'", ns)
+		return
+	}
+	if eventType == core.ChangeEventTypeCreated && resType == database.CollectionPins {
 		or.events.NewPins() <- sequence
 	}
-	or.adminEvents.Dispatch(&fftypes.ChangeEvent{
-		Collection: string(resType),
-		Type:       eventType,
-		Sequence:   &sequence,
-	})
 }
 
-func (or *orchestrator) UUIDCollectionNSEvent(resType database.UUIDCollectionNS, eventType fftypes.ChangeEventType, ns string, id *fftypes.UUID) {
+func (or *orchestrator) UUIDCollectionNSEvent(resType database.UUIDCollectionNS, eventType core.ChangeEventType, ns string, id *fftypes.UUID) {
+	if ns != or.namespace.LocalName {
+		log.L(or.ctx).Debugf("Ignoring database event from different namespace '%s'", ns)
+		return
+	}
 	switch {
-	case eventType == fftypes.ChangeEventTypeCreated && resType == database.CollectionSubscriptions:
+	case eventType == core.ChangeEventTypeCreated && resType == database.CollectionSubscriptions:
 		or.events.NewSubscriptions() <- id
-	case eventType == fftypes.ChangeEventTypeDeleted && resType == database.CollectionSubscriptions:
+	case eventType == core.ChangeEventTypeDeleted && resType == database.CollectionSubscriptions:
 		or.events.DeletedSubscriptions() <- id
-	case eventType == fftypes.ChangeEventTypeUpdated && resType == database.CollectionSubscriptions:
+	case eventType == core.ChangeEventTypeUpdated && resType == database.CollectionSubscriptions:
 		or.events.SubscriptionUpdates() <- id
 	}
-	or.adminEvents.Dispatch(&fftypes.ChangeEvent{
-		Collection: string(resType),
-		Type:       eventType,
-		Namespace:  ns,
-		ID:         id,
-	})
 }
 
-func (or *orchestrator) UUIDCollectionEvent(resType database.UUIDCollection, eventType fftypes.ChangeEventType, id *fftypes.UUID) {
-	or.adminEvents.Dispatch(&fftypes.ChangeEvent{
-		Collection: string(resType),
-		Type:       eventType,
-		ID:         id,
-	})
-}
-
-func (or *orchestrator) HashCollectionNSEvent(resType database.HashCollectionNS, eventType fftypes.ChangeEventType, ns string, hash *fftypes.Bytes32) {
-	or.adminEvents.Dispatch(&fftypes.ChangeEvent{
-		Collection: string(resType),
-		Type:       eventType,
-		Namespace:  ns,
-		Hash:       hash,
-	})
-
+func (or *orchestrator) HashCollectionNSEvent(resType database.HashCollectionNS, eventType core.ChangeEventType, ns string, hash *fftypes.Bytes32) {
+	// do nothing
 }

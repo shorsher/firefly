@@ -21,13 +21,14 @@ import (
 	"testing"
 
 	"github.com/hyperledger/firefly/mocks/networkmapmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestGetOrganizations(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mnm := &networkmapmocks.Manager{}
 	o.On("NetworkMap").Return(mnm)
 	req := httptest.NewRequest("GET", "/api/v1/network/organizations", nil)
@@ -35,7 +36,7 @@ func TestGetOrganizations(t *testing.T) {
 	res := httptest.NewRecorder()
 
 	mnm.On("GetOrganizations", mock.Anything, mock.Anything).
-		Return([]*fftypes.Identity{}, nil, nil)
+		Return([]*core.Identity{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)

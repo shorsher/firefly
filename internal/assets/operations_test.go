@@ -20,11 +20,11 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/hyperledger/firefly/internal/operations"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/internal/txcommon"
 	"github.com/hyperledger/firefly/mocks/databasemocks"
 	"github.com/hyperledger/firefly/mocks/tokenmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -33,10 +33,12 @@ func TestPrepareAndRunCreatePool(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeTokenCreatePool,
+	op := &core.Operation{
+		Type:      core.OpTypeTokenCreatePool,
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 		Locator:   "F1",
 	}
@@ -44,7 +46,7 @@ func TestPrepareAndRunCreatePool(t *testing.T) {
 	assert.NoError(t, err)
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
-	mti.On("CreateTokenPool", context.Background(), op.ID, pool).Return(false, nil)
+	mti.On("CreateTokenPool", context.Background(), "ns1:"+op.ID.String(), pool).Return(false, nil)
 
 	po, err := am.PrepareOperation(context.Background(), op)
 	assert.NoError(t, err)
@@ -62,10 +64,12 @@ func TestPrepareAndRunActivatePool(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeTokenActivatePool,
+	op := &core.Operation{
+		Type:      core.OpTypeTokenActivatePool,
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 		ID:        fftypes.NewUUID(),
 		Locator:   "F1",
@@ -74,8 +78,8 @@ func TestPrepareAndRunActivatePool(t *testing.T) {
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
 	mdi := am.database.(*databasemocks.Plugin)
-	mti.On("ActivateTokenPool", context.Background(), op.ID, pool).Return(true, nil)
-	mdi.On("GetTokenPoolByID", context.Background(), pool.ID).Return(pool, nil)
+	mti.On("ActivateTokenPool", context.Background(), "ns1:"+op.ID.String(), pool).Return(true, nil)
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", pool.ID).Return(pool, nil)
 
 	po, err := am.PrepareOperation(context.Background(), op)
 	assert.NoError(t, err)
@@ -94,24 +98,26 @@ func TestPrepareAndRunTransfer(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeTokenTransfer,
+	op := &core.Operation{
+		Type:      core.OpTypeTokenTransfer,
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 		Locator:   "F1",
 	}
-	transfer := &fftypes.TokenTransfer{
+	transfer := &core.TokenTransfer{
 		LocalID: fftypes.NewUUID(),
 		Pool:    pool.ID,
-		Type:    fftypes.TokenTransferTypeTransfer,
+		Type:    core.TokenTransferTypeTransfer,
 	}
 	txcommon.AddTokenTransferInputs(op, transfer)
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
 	mdi := am.database.(*databasemocks.Plugin)
-	mti.On("TransferTokens", context.Background(), op.ID, "F1", transfer).Return(nil)
-	mdi.On("GetTokenPoolByID", context.Background(), pool.ID).Return(pool, nil)
+	mti.On("TransferTokens", context.Background(), "ns1:"+op.ID.String(), "F1", transfer).Return(nil)
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", pool.ID).Return(pool, nil)
 
 	po, err := am.PrepareOperation(context.Background(), op)
 	assert.NoError(t, err)
@@ -131,14 +137,16 @@ func TestPrepareAndRunApproval(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeTokenApproval,
+	op := &core.Operation{
+		Type:      core.OpTypeTokenApproval,
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 		Locator:   "F1",
 	}
-	approval := &fftypes.TokenApproval{
+	approval := &core.TokenApproval{
 		LocalID:  fftypes.NewUUID(),
 		Pool:     pool.ID,
 		Approved: true,
@@ -147,8 +155,8 @@ func TestPrepareAndRunApproval(t *testing.T) {
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
 	mdi := am.database.(*databasemocks.Plugin)
-	mti.On("TokensApproval", context.Background(), op.ID, "F1", approval).Return(nil)
-	mdi.On("GetTokenPoolByID", context.Background(), pool.ID).Return(pool, nil)
+	mti.On("TokensApproval", context.Background(), "ns1:"+op.ID.String(), "F1", approval).Return(nil)
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", pool.ID).Return(pool, nil)
 
 	po, err := am.PrepareOperation(context.Background(), op)
 	assert.NoError(t, err)
@@ -168,7 +176,7 @@ func TestPrepareOperationNotSupported(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	po, err := am.PrepareOperation(context.Background(), &fftypes.Operation{})
+	po, err := am.PrepareOperation(context.Background(), &core.Operation{})
 
 	assert.Nil(t, po)
 	assert.Regexp(t, "FF10371", err)
@@ -178,8 +186,8 @@ func TestPrepareOperationCreatePoolBadInput(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenCreatePool,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenCreatePool,
 		Input: fftypes.JSONObject{"id": "bad"},
 	}
 
@@ -191,8 +199,8 @@ func TestPrepareOperationActivatePoolBadInput(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenActivatePool,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenActivatePool,
 		Input: fftypes.JSONObject{"id": "bad"},
 	}
 
@@ -205,13 +213,13 @@ func TestPrepareOperationActivatePoolError(t *testing.T) {
 	defer cancel()
 
 	poolID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenActivatePool,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenActivatePool,
 		Input: fftypes.JSONObject{"id": poolID.String()},
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("GetTokenPoolByID", context.Background(), poolID).Return(nil, fmt.Errorf("pop"))
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", poolID).Return(nil, fmt.Errorf("pop"))
 
 	_, err := am.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
@@ -224,13 +232,13 @@ func TestPrepareOperationActivatePoolNotFound(t *testing.T) {
 	defer cancel()
 
 	poolID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenActivatePool,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenActivatePool,
 		Input: fftypes.JSONObject{"id": poolID.String()},
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("GetTokenPoolByID", context.Background(), poolID).Return(nil, nil)
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", poolID).Return(nil, nil)
 
 	_, err := am.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
@@ -242,8 +250,8 @@ func TestPrepareOperationTransferBadInput(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenTransfer,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenTransfer,
 		Input: fftypes.JSONObject{"localId": "bad"},
 	}
 
@@ -256,13 +264,13 @@ func TestPrepareOperationTransferError(t *testing.T) {
 	defer cancel()
 
 	poolID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenTransfer,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenTransfer,
 		Input: fftypes.JSONObject{"pool": poolID.String()},
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("GetTokenPoolByID", context.Background(), poolID).Return(nil, fmt.Errorf("pop"))
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", poolID).Return(nil, fmt.Errorf("pop"))
 
 	_, err := am.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
@@ -275,13 +283,13 @@ func TestPrepareOperationTransferNotFound(t *testing.T) {
 	defer cancel()
 
 	poolID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenTransfer,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenTransfer,
 		Input: fftypes.JSONObject{"pool": poolID.String()},
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("GetTokenPoolByID", context.Background(), poolID).Return(nil, nil)
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", poolID).Return(nil, nil)
 
 	_, err := am.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
@@ -293,8 +301,8 @@ func TestPrepareOperationApprovalBadInput(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenApproval,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenApproval,
 		Input: fftypes.JSONObject{"localId": "bad"},
 	}
 
@@ -307,13 +315,13 @@ func TestPrepareOperationApprovalError(t *testing.T) {
 	defer cancel()
 
 	poolID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenApproval,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenApproval,
 		Input: fftypes.JSONObject{"pool": poolID.String()},
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("GetTokenPoolByID", context.Background(), poolID).Return(nil, fmt.Errorf("pop"))
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", poolID).Return(nil, fmt.Errorf("pop"))
 
 	_, err := am.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
@@ -326,13 +334,13 @@ func TestPrepareOperationApprovalNotFound(t *testing.T) {
 	defer cancel()
 
 	poolID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeTokenApproval,
+	op := &core.Operation{
+		Type:  core.OpTypeTokenApproval,
 		Input: fftypes.JSONObject{"pool": poolID.String()},
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("GetTokenPoolByID", context.Background(), poolID).Return(nil, nil)
+	mdi.On("GetTokenPoolByID", context.Background(), "ns1", poolID).Return(nil, nil)
 
 	_, err := am.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
@@ -344,7 +352,7 @@ func TestRunOperationNotSupported(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	_, complete, err := am.RunOperation(context.Background(), &fftypes.PreparedOperation{})
+	_, complete, err := am.RunOperation(context.Background(), &core.PreparedOperation{})
 
 	assert.False(t, complete)
 	assert.Regexp(t, "FF10378", err)
@@ -354,8 +362,8 @@ func TestRunOperationCreatePoolBadPlugin(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{}
-	pool := &fftypes.TokenPool{}
+	op := &core.Operation{}
+	pool := &core.TokenPool{}
 
 	_, complete, err := am.RunOperation(context.Background(), opCreatePool(op, pool))
 
@@ -367,15 +375,16 @@ func TestRunOperationCreatePool(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		ID: fftypes.NewUUID(),
+	op := &core.Operation{
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 	}
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
-	mti.On("CreateTokenPool", context.Background(), op.ID, pool).Return(false, nil)
+	mti.On("CreateTokenPool", context.Background(), "ns1:"+op.ID.String(), pool).Return(false, nil)
 
 	_, complete, err := am.RunOperation(context.Background(), opCreatePool(op, pool))
 
@@ -389,8 +398,8 @@ func TestRunOperationActivatePoolBadPlugin(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{}
-	pool := &fftypes.TokenPool{}
+	op := &core.Operation{}
+	pool := &core.TokenPool{}
 
 	_, complete, err := am.RunOperation(context.Background(), opActivatePool(op, pool))
 
@@ -402,9 +411,9 @@ func TestRunOperationTransferBadPlugin(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{}
-	pool := &fftypes.TokenPool{}
-	transfer := &fftypes.TokenTransfer{}
+	op := &core.Operation{}
+	pool := &core.TokenPool{}
+	transfer := &core.TokenTransfer{}
 
 	_, complete, err := am.RunOperation(context.Background(), opTransfer(op, pool, transfer))
 
@@ -416,9 +425,9 @@ func TestRunOperationApprovalBadPlugin(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{}
-	pool := &fftypes.TokenPool{}
-	approval := &fftypes.TokenApproval{}
+	op := &core.Operation{}
+	pool := &core.TokenPool{}
+	approval := &core.TokenApproval{}
 
 	_, complete, err := am.RunOperation(context.Background(), opApproval(op, pool, approval))
 
@@ -430,13 +439,13 @@ func TestRunOperationTransferUnknownType(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID: fftypes.NewUUID(),
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 	}
-	transfer := &fftypes.TokenTransfer{
+	transfer := &core.TokenTransfer{
 		Type: "bad",
 	}
 
@@ -449,19 +458,20 @@ func TestRunOperationTransferMint(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		ID: fftypes.NewUUID(),
+	op := &core.Operation{
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 		Locator:   "F1",
 	}
-	transfer := &fftypes.TokenTransfer{
-		Type: fftypes.TokenTransferTypeMint,
+	transfer := &core.TokenTransfer{
+		Type: core.TokenTransferTypeMint,
 	}
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
-	mti.On("MintTokens", context.Background(), op.ID, "F1", transfer).Return(nil)
+	mti.On("MintTokens", context.Background(), "ns1:"+op.ID.String(), "F1", transfer).Return(nil)
 
 	_, complete, err := am.RunOperation(context.Background(), opTransfer(op, pool, transfer))
 
@@ -475,19 +485,20 @@ func TestRunOperationTransferBurn(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		ID: fftypes.NewUUID(),
+	op := &core.Operation{
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 		Locator:   "F1",
 	}
-	transfer := &fftypes.TokenTransfer{
-		Type: fftypes.TokenTransferTypeBurn,
+	transfer := &core.TokenTransfer{
+		Type: core.TokenTransferTypeBurn,
 	}
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
-	mti.On("BurnTokens", context.Background(), op.ID, "F1", transfer).Return(nil)
+	mti.On("BurnTokens", context.Background(), "ns1:"+op.ID.String(), "F1", transfer).Return(nil)
 
 	_, complete, err := am.RunOperation(context.Background(), opTransfer(op, pool, transfer))
 
@@ -501,19 +512,20 @@ func TestRunOperationTransfer(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		ID: fftypes.NewUUID(),
+	op := &core.Operation{
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	pool := &fftypes.TokenPool{
+	pool := &core.TokenPool{
 		Connector: "magic-tokens",
 		Locator:   "F1",
 	}
-	transfer := &fftypes.TokenTransfer{
-		Type: fftypes.TokenTransferTypeTransfer,
+	transfer := &core.TokenTransfer{
+		Type: core.TokenTransferTypeTransfer,
 	}
 
 	mti := am.tokens["magic-tokens"].(*tokenmocks.Plugin)
-	mti.On("TransferTokens", context.Background(), op.ID, "F1", transfer).Return(nil)
+	mti.On("TransferTokens", context.Background(), "ns1:"+op.ID.String(), "F1", transfer).Return(nil)
 
 	_, complete, err := am.RunOperation(context.Background(), opTransfer(op, pool, transfer))
 
@@ -527,23 +539,24 @@ func TestOperationUpdatePool(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	pool := &fftypes.TokenPool{
-		ID: fftypes.NewUUID(),
+	pool := &core.TokenPool{
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenCreatePool,
+		Type: core.OpTypeTokenCreatePool,
 	}
 	err := txcommon.AddTokenPoolCreateInputs(op, pool)
 	assert.NoError(t, err)
 
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *fftypes.Event) bool {
-		return event.Type == fftypes.EventTypePoolOpFailed && *event.Reference == *op.ID && *event.Correlator == *pool.ID
+	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *core.Event) bool {
+		return event.Type == core.EventTypePoolOpFailed && *event.Reference == *op.ID && *event.Correlator == *pool.ID
 	})).Return(nil)
 
 	err = am.OnOperationUpdate(context.Background(), op, update)
@@ -557,17 +570,17 @@ func TestOperationUpdatePoolBadInput(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenCreatePool,
+		Type: core.OpTypeTokenCreatePool,
 	}
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *fftypes.Event) bool {
-		return event.Type == fftypes.EventTypePoolOpFailed && *event.Reference == *op.ID && event.Correlator == nil
+	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *core.Event) bool {
+		return event.Type == core.EventTypePoolOpFailed && *event.Reference == *op.ID && event.Correlator == nil
 	})).Return(nil)
 
 	err := am.OnOperationUpdate(context.Background(), op, update)
@@ -581,12 +594,12 @@ func TestOperationUpdatePoolEventFail(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenCreatePool,
+		Type: core.OpTypeTokenCreatePool,
 	}
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
@@ -603,25 +616,25 @@ func TestOperationUpdateTransfer(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	transfer := &fftypes.TokenTransfer{
+	transfer := &core.TokenTransfer{
 		LocalID: fftypes.NewUUID(),
 		Pool:    fftypes.NewUUID(),
-		Type:    fftypes.TokenTransferTypeTransfer,
+		Type:    core.TokenTransferTypeTransfer,
 	}
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenTransfer,
+		Type: core.OpTypeTokenTransfer,
 	}
 	err := txcommon.AddTokenTransferInputs(op, transfer)
 	assert.NoError(t, err)
 
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *fftypes.Event) bool {
-		return event.Type == fftypes.EventTypeTransferOpFailed && *event.Reference == *op.ID && *event.Correlator == *transfer.LocalID
+	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *core.Event) bool {
+		return event.Type == core.EventTypeTransferOpFailed && *event.Reference == *op.ID && *event.Correlator == *transfer.LocalID
 	})).Return(nil)
 
 	err = am.OnOperationUpdate(context.Background(), op, update)
@@ -635,17 +648,17 @@ func TestOperationUpdateTransferBadInput(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenTransfer,
+		Type: core.OpTypeTokenTransfer,
 	}
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *fftypes.Event) bool {
-		return event.Type == fftypes.EventTypeTransferOpFailed && *event.Reference == *op.ID && event.Correlator == nil
+	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *core.Event) bool {
+		return event.Type == core.EventTypeTransferOpFailed && *event.Reference == *op.ID && event.Correlator == nil
 	})).Return(nil)
 
 	err := am.OnOperationUpdate(context.Background(), op, update)
@@ -659,12 +672,12 @@ func TestOperationUpdateTransferEventFail(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenTransfer,
+		Type: core.OpTypeTokenTransfer,
 	}
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
@@ -681,24 +694,24 @@ func TestOperationUpdateApproval(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	approval := &fftypes.TokenApproval{
+	approval := &core.TokenApproval{
 		LocalID: fftypes.NewUUID(),
 		Pool:    fftypes.NewUUID(),
 	}
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenApproval,
+		Type: core.OpTypeTokenApproval,
 	}
 	err := txcommon.AddTokenApprovalInputs(op, approval)
 	assert.NoError(t, err)
 
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *fftypes.Event) bool {
-		return event.Type == fftypes.EventTypeApprovalOpFailed && *event.Reference == *op.ID && *event.Correlator == *approval.LocalID
+	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *core.Event) bool {
+		return event.Type == core.EventTypeApprovalOpFailed && *event.Reference == *op.ID && *event.Correlator == *approval.LocalID
 	})).Return(nil)
 
 	err = am.OnOperationUpdate(context.Background(), op, update)
@@ -712,17 +725,17 @@ func TestOperationUpdateApprovalBadInput(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenApproval,
+		Type: core.OpTypeTokenApproval,
 	}
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)
-	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *fftypes.Event) bool {
-		return event.Type == fftypes.EventTypeApprovalOpFailed && *event.Reference == *op.ID && event.Correlator == nil
+	mdi.On("InsertEvent", context.Background(), mock.MatchedBy(func(event *core.Event) bool {
+		return event.Type == core.EventTypeApprovalOpFailed && *event.Reference == *op.ID && event.Correlator == nil
 	})).Return(nil)
 
 	err := am.OnOperationUpdate(context.Background(), op, update)
@@ -736,12 +749,12 @@ func TestOperationUpdateApprovalEventFail(t *testing.T) {
 	am, cancel := newTestAssets(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
+	op := &core.Operation{
 		ID:   fftypes.NewUUID(),
-		Type: fftypes.OpTypeTokenApproval,
+		Type: core.OpTypeTokenApproval,
 	}
-	update := &operations.OperationUpdate{
-		Status: fftypes.OpStatusFailed,
+	update := &core.OperationUpdate{
+		Status: core.OpStatusFailed,
 	}
 
 	mdi := am.database.(*databasemocks.Plugin)

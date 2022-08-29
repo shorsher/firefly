@@ -21,20 +21,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestGetMessages(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	req := httptest.NewRequest("GET", "/api/v1/namespaces/mynamespace/messages", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	o.On("GetMessages", mock.Anything, "mynamespace", mock.Anything).
-		Return([]*fftypes.Message{}, nil, nil)
+	o.On("GetMessages", mock.Anything, mock.Anything).
+		Return([]*core.Message{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)
@@ -42,13 +43,14 @@ func TestGetMessages(t *testing.T) {
 
 func TestGetMessagesWithCount(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	req := httptest.NewRequest("GET", "/api/v1/namespaces/mynamespace/messages?count", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
 	var ten int64 = 10
-	o.On("GetMessages", mock.Anything, "mynamespace", mock.Anything).
-		Return([]*fftypes.Message{}, &database.FilterResult{
+	o.On("GetMessages", mock.Anything, mock.Anything).
+		Return([]*core.Message{}, &database.FilterResult{
 			TotalCount: &ten,
 		}, nil)
 	r.ServeHTTP(res, req)
@@ -64,13 +66,14 @@ func TestGetMessagesWithCount(t *testing.T) {
 
 func TestGetMessagesWithCountAndData(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	req := httptest.NewRequest("GET", "/api/v1/namespaces/mynamespace/messages?count&fetchdata", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
 	var ten int64 = 10
-	o.On("GetMessagesWithData", mock.Anything, "mynamespace", mock.Anything).
-		Return([]*fftypes.MessageInOut{}, &database.FilterResult{
+	o.On("GetMessagesWithData", mock.Anything, mock.Anything).
+		Return([]*core.MessageInOut{}, &database.FilterResult{
 			TotalCount: &ten,
 		}, nil)
 	r.ServeHTTP(res, req)

@@ -20,20 +20,23 @@ import (
 	"context"
 	"io"
 
-	"github.com/hyperledger/firefly/pkg/config"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
 // Plugin is the interface implemented by each Shared Storage plugin
 type Plugin interface {
-	fftypes.Named
+	core.Named
 
-	// InitPrefix initializes the set of configuration options that are valid, with defaults. Called on all plugins.
-	InitPrefix(prefix config.Prefix)
+	// InitConfig initializes the set of configuration options that are valid, with defaults. Called on all plugins.
+	InitConfig(config config.Section)
 
 	// Init initializes the plugin, with configuration
-	// Returns the supported featureset of the interface
-	Init(ctx context.Context, prefix config.Prefix, callbacks Callbacks) error
+	Init(ctx context.Context, config config.Section) error
+
+	// SetHandler registers a handler to receive callbacks
+	// Plugin will attempt (but is not guaranteed) to deliver events only for the given namespace
+	SetHandler(namespace string, handler Callbacks)
 
 	// Capabilities returns capabilities - not called until after Init
 	Capabilities() *Capabilities

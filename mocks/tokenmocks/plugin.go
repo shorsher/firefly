@@ -5,9 +5,9 @@ package tokenmocks
 import (
 	context "context"
 
-	config "github.com/hyperledger/firefly/pkg/config"
+	config "github.com/hyperledger/firefly-common/pkg/config"
 
-	fftypes "github.com/hyperledger/firefly/pkg/fftypes"
+	core "github.com/hyperledger/firefly/pkg/core"
 
 	mock "github.com/stretchr/testify/mock"
 
@@ -19,20 +19,20 @@ type Plugin struct {
 	mock.Mock
 }
 
-// ActivateTokenPool provides a mock function with given fields: ctx, opID, pool
-func (_m *Plugin) ActivateTokenPool(ctx context.Context, opID *fftypes.UUID, pool *fftypes.TokenPool) (bool, error) {
-	ret := _m.Called(ctx, opID, pool)
+// ActivateTokenPool provides a mock function with given fields: ctx, nsOpID, pool
+func (_m *Plugin) ActivateTokenPool(ctx context.Context, nsOpID string, pool *core.TokenPool) (bool, error) {
+	ret := _m.Called(ctx, nsOpID, pool)
 
 	var r0 bool
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.UUID, *fftypes.TokenPool) bool); ok {
-		r0 = rf(ctx, opID, pool)
+	if rf, ok := ret.Get(0).(func(context.Context, string, *core.TokenPool) bool); ok {
+		r0 = rf(ctx, nsOpID, pool)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
 
 	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context, *fftypes.UUID, *fftypes.TokenPool) error); ok {
-		r1 = rf(ctx, opID, pool)
+	if rf, ok := ret.Get(1).(func(context.Context, string, *core.TokenPool) error); ok {
+		r1 = rf(ctx, nsOpID, pool)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -40,13 +40,13 @@ func (_m *Plugin) ActivateTokenPool(ctx context.Context, opID *fftypes.UUID, poo
 	return r0, r1
 }
 
-// BurnTokens provides a mock function with given fields: ctx, opID, poolLocator, burn
-func (_m *Plugin) BurnTokens(ctx context.Context, opID *fftypes.UUID, poolLocator string, burn *fftypes.TokenTransfer) error {
-	ret := _m.Called(ctx, opID, poolLocator, burn)
+// BurnTokens provides a mock function with given fields: ctx, nsOpID, poolLocator, burn
+func (_m *Plugin) BurnTokens(ctx context.Context, nsOpID string, poolLocator string, burn *core.TokenTransfer) error {
+	ret := _m.Called(ctx, nsOpID, poolLocator, burn)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.UUID, string, *fftypes.TokenTransfer) error); ok {
-		r0 = rf(ctx, opID, poolLocator, burn)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, *core.TokenTransfer) error); ok {
+		r0 = rf(ctx, nsOpID, poolLocator, burn)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -70,20 +70,20 @@ func (_m *Plugin) Capabilities() *tokens.Capabilities {
 	return r0
 }
 
-// CreateTokenPool provides a mock function with given fields: ctx, opID, pool
-func (_m *Plugin) CreateTokenPool(ctx context.Context, opID *fftypes.UUID, pool *fftypes.TokenPool) (bool, error) {
-	ret := _m.Called(ctx, opID, pool)
+// CreateTokenPool provides a mock function with given fields: ctx, nsOpID, pool
+func (_m *Plugin) CreateTokenPool(ctx context.Context, nsOpID string, pool *core.TokenPool) (bool, error) {
+	ret := _m.Called(ctx, nsOpID, pool)
 
 	var r0 bool
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.UUID, *fftypes.TokenPool) bool); ok {
-		r0 = rf(ctx, opID, pool)
+	if rf, ok := ret.Get(0).(func(context.Context, string, *core.TokenPool) bool); ok {
+		r0 = rf(ctx, nsOpID, pool)
 	} else {
 		r0 = ret.Get(0).(bool)
 	}
 
 	var r1 error
-	if rf, ok := ret.Get(1).(func(context.Context, *fftypes.UUID, *fftypes.TokenPool) error); ok {
-		r1 = rf(ctx, opID, pool)
+	if rf, ok := ret.Get(1).(func(context.Context, string, *core.TokenPool) error); ok {
+		r1 = rf(ctx, nsOpID, pool)
 	} else {
 		r1 = ret.Error(1)
 	}
@@ -91,13 +91,13 @@ func (_m *Plugin) CreateTokenPool(ctx context.Context, opID *fftypes.UUID, pool 
 	return r0, r1
 }
 
-// Init provides a mock function with given fields: ctx, name, prefix, callbacks
-func (_m *Plugin) Init(ctx context.Context, name string, prefix config.Prefix, callbacks tokens.Callbacks) error {
-	ret := _m.Called(ctx, name, prefix, callbacks)
+// Init provides a mock function with given fields: ctx, name, _a2
+func (_m *Plugin) Init(ctx context.Context, name string, _a2 config.Section) error {
+	ret := _m.Called(ctx, name, _a2)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, string, config.Prefix, tokens.Callbacks) error); ok {
-		r0 = rf(ctx, name, prefix, callbacks)
+	if rf, ok := ret.Get(0).(func(context.Context, string, config.Section) error); ok {
+		r0 = rf(ctx, name, _a2)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -105,18 +105,18 @@ func (_m *Plugin) Init(ctx context.Context, name string, prefix config.Prefix, c
 	return r0
 }
 
-// InitPrefix provides a mock function with given fields: prefix
-func (_m *Plugin) InitPrefix(prefix config.PrefixArray) {
-	_m.Called(prefix)
+// InitConfig provides a mock function with given fields: _a0
+func (_m *Plugin) InitConfig(_a0 config.KeySet) {
+	_m.Called(_a0)
 }
 
-// MintTokens provides a mock function with given fields: ctx, opID, poolLocator, mint
-func (_m *Plugin) MintTokens(ctx context.Context, opID *fftypes.UUID, poolLocator string, mint *fftypes.TokenTransfer) error {
-	ret := _m.Called(ctx, opID, poolLocator, mint)
+// MintTokens provides a mock function with given fields: ctx, nsOpID, poolLocator, mint
+func (_m *Plugin) MintTokens(ctx context.Context, nsOpID string, poolLocator string, mint *core.TokenTransfer) error {
+	ret := _m.Called(ctx, nsOpID, poolLocator, mint)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.UUID, string, *fftypes.TokenTransfer) error); ok {
-		r0 = rf(ctx, opID, poolLocator, mint)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, *core.TokenTransfer) error); ok {
+		r0 = rf(ctx, nsOpID, poolLocator, mint)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -138,6 +138,16 @@ func (_m *Plugin) Name() string {
 	return r0
 }
 
+// SetHandler provides a mock function with given fields: namespace, handler
+func (_m *Plugin) SetHandler(namespace string, handler tokens.Callbacks) {
+	_m.Called(namespace, handler)
+}
+
+// SetOperationHandler provides a mock function with given fields: namespace, handler
+func (_m *Plugin) SetOperationHandler(namespace string, handler core.OperationCallbacks) {
+	_m.Called(namespace, handler)
+}
+
 // Start provides a mock function with given fields:
 func (_m *Plugin) Start() error {
 	ret := _m.Called()
@@ -152,13 +162,13 @@ func (_m *Plugin) Start() error {
 	return r0
 }
 
-// TokensApproval provides a mock function with given fields: ctx, opID, poolLocator, approval
-func (_m *Plugin) TokensApproval(ctx context.Context, opID *fftypes.UUID, poolLocator string, approval *fftypes.TokenApproval) error {
-	ret := _m.Called(ctx, opID, poolLocator, approval)
+// TokensApproval provides a mock function with given fields: ctx, nsOpID, poolLocator, approval
+func (_m *Plugin) TokensApproval(ctx context.Context, nsOpID string, poolLocator string, approval *core.TokenApproval) error {
+	ret := _m.Called(ctx, nsOpID, poolLocator, approval)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.UUID, string, *fftypes.TokenApproval) error); ok {
-		r0 = rf(ctx, opID, poolLocator, approval)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, *core.TokenApproval) error); ok {
+		r0 = rf(ctx, nsOpID, poolLocator, approval)
 	} else {
 		r0 = ret.Error(0)
 	}
@@ -166,13 +176,13 @@ func (_m *Plugin) TokensApproval(ctx context.Context, opID *fftypes.UUID, poolLo
 	return r0
 }
 
-// TransferTokens provides a mock function with given fields: ctx, opID, poolLocator, transfer
-func (_m *Plugin) TransferTokens(ctx context.Context, opID *fftypes.UUID, poolLocator string, transfer *fftypes.TokenTransfer) error {
-	ret := _m.Called(ctx, opID, poolLocator, transfer)
+// TransferTokens provides a mock function with given fields: ctx, nsOpID, poolLocator, transfer
+func (_m *Plugin) TransferTokens(ctx context.Context, nsOpID string, poolLocator string, transfer *core.TokenTransfer) error {
+	ret := _m.Called(ctx, nsOpID, poolLocator, transfer)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *fftypes.UUID, string, *fftypes.TokenTransfer) error); ok {
-		r0 = rf(ctx, opID, poolLocator, transfer)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, *core.TokenTransfer) error); ok {
+		r0 = rf(ctx, nsOpID, poolLocator, transfer)
 	} else {
 		r0 = ret.Error(0)
 	}

@@ -19,18 +19,18 @@ package broadcast
 import (
 	"context"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
 	"github.com/hyperledger/firefly/internal/data"
-	"github.com/hyperledger/firefly/internal/sysmessaging"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly/internal/syncasync"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-func (bm *broadcastManager) NewBroadcast(ns string, in *fftypes.MessageInOut) sysmessaging.MessageSender {
+func (bm *broadcastManager) NewBroadcast(in *core.MessageInOut) syncasync.Sender {
 	broadcast := &broadcastSender{
-		mgr:       bm,
-		namespace: ns,
+		mgr: bm,
 		msg: &data.NewMessage{
 			Message: in,
 		},
@@ -39,8 +39,9 @@ func (bm *broadcastManager) NewBroadcast(ns string, in *fftypes.MessageInOut) sy
 	return broadcast
 }
 
-func (bm *broadcastManager) BroadcastMessage(ctx context.Context, ns string, in *fftypes.MessageInOut, waitConfirm bool) (out *fftypes.Message, err error) {
-	broadcast := bm.NewBroadcast(ns, in)
+func (bm *broadcastManager) BroadcastMessage(ctx context.Context, in *core.MessageInOut, waitConfirm bool) (out *core.Message, err error) {
+	broadcast := bm.NewBroadcast(in)
+	in.Header.Type = core.MessageTypeBroadcast
 	if bm.metrics.IsMetricsEnabled() {
 		bm.metrics.MessageSubmitted(&in.Message)
 	}
@@ -53,10 +54,9 @@ func (bm *broadcastManager) BroadcastMessage(ctx context.Context, ns string, in 
 }
 
 type broadcastSender struct {
-	mgr       *broadcastManager
-	namespace string
-	msg       *data.NewMessage
-	resolved  bool
+	mgr      *broadcastManager
+	msg      *data.NewMessage
+	resolved bool
 }
 
 // sendMethod is the specific operation requested of the broadcastSender.
@@ -87,13 +87,14 @@ func (s *broadcastSender) SendAndWait(ctx context.Context) error {
 func (s *broadcastSender) setDefaults() {
 	msg := s.msg.Message
 	msg.Header.ID = fftypes.NewUUID()
-	msg.Header.Namespace = s.namespace
-	msg.State = fftypes.MessageStateReady
+	msg.Header.Namespace = s.mgr.namespace.RemoteName
+	msg.LocalNamespace = s.mgr.namespace.LocalName
+	msg.State = core.MessageStateReady
 	if msg.Header.Type == "" {
-		msg.Header.Type = fftypes.MessageTypeBroadcast
+		msg.Header.Type = core.MessageTypeBroadcast
 	}
 	// We only have one transaction type for broadcast currently
-	msg.Header.TxType = fftypes.TransactionTypeBatchPin
+	msg.Header.TxType = core.TransactionTypeBatchPin
 }
 
 func (s *broadcastSender) resolveAndSend(ctx context.Context, method sendMethod) error {
@@ -115,8 +116,8 @@ func (s *broadcastSender) resolve(ctx context.Context) error {
 	msg := s.msg.Message
 
 	// Resolve the sending identity
-	if msg.Header.Type != fftypes.MessageTypeDefinition || msg.Header.Tag != fftypes.SystemTagIdentityClaim {
-		if err := s.mgr.identity.ResolveInputSigningIdentity(ctx, msg.Header.Namespace, &msg.Header.SignerRef); err != nil {
+	if msg.Header.Type != core.MessageTypeDefinition || msg.Header.Tag != core.SystemTagIdentityClaim {
+		if err := s.mgr.identity.ResolveInputSigningIdentity(ctx, &msg.Header.SignerRef); err != nil {
 			return i18n.WrapError(ctx, err, coremsgs.MsgAuthorInvalid)
 		}
 	}
@@ -128,7 +129,7 @@ func (s *broadcastSender) resolve(ctx context.Context) error {
 
 func (s *broadcastSender) sendInternal(ctx context.Context, method sendMethod) (err error) {
 	if method == methodSendAndWait {
-		out, err := s.mgr.syncasync.WaitForMessage(ctx, s.namespace, s.msg.Message.Header.ID, s.Send)
+		out, err := s.mgr.syncasync.WaitForMessage(ctx, s.msg.Message.Header.ID, s.Send)
 		if out != nil {
 			s.msg.Message.Message = *out
 		}
@@ -148,7 +149,7 @@ func (s *broadcastSender) sendInternal(ctx context.Context, method sendMethod) (
 	if err := s.mgr.data.WriteNewMessage(ctx, s.msg); err != nil {
 		return err
 	}
-	log.L(ctx).Infof("Sent broadcast message %s:%s sequence=%d datacount=%d", msg.Header.Namespace, msg.Header.ID, msg.Sequence, len(s.msg.AllData))
+	log.L(ctx).Infof("Sent broadcast message %s sequence=%d datacount=%d", msg.Header.ID, msg.Sequence, len(s.msg.AllData))
 
 	return err
 }

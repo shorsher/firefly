@@ -21,11 +21,12 @@ import (
 	"database/sql"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 var (
@@ -53,7 +54,7 @@ var (
 
 const operationsTable = "operations"
 
-func (s *SQLCommon) InsertOperation(ctx context.Context, operation *fftypes.Operation, hooks ...database.PostCompletionHook) (err error) {
+func (s *SQLCommon) InsertOperation(ctx context.Context, operation *core.Operation, hooks ...database.PostCompletionHook) (err error) {
 	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
 	if err != nil {
 		return err
@@ -78,7 +79,7 @@ func (s *SQLCommon) InsertOperation(ctx context.Context, operation *fftypes.Oper
 				operation.Retry,
 			),
 		func() {
-			s.callbacks.UUIDCollectionNSEvent(database.CollectionOperations, fftypes.ChangeEventTypeCreated, operation.Namespace, operation.ID)
+			s.callbacks.UUIDCollectionNSEvent(database.CollectionOperations, core.ChangeEventTypeCreated, operation.Namespace, operation.ID)
 			for _, hook := range hooks {
 				hook()
 			}
@@ -90,8 +91,8 @@ func (s *SQLCommon) InsertOperation(ctx context.Context, operation *fftypes.Oper
 	return s.commitTx(ctx, tx, autoCommit)
 }
 
-func (s *SQLCommon) opResult(ctx context.Context, row *sql.Rows) (*fftypes.Operation, error) {
-	var op fftypes.Operation
+func (s *SQLCommon) opResult(ctx context.Context, row *sql.Rows) (*core.Operation, error) {
+	var op core.Operation
 	err := row.Scan(
 		&op.ID,
 		&op.Namespace,
@@ -112,12 +113,12 @@ func (s *SQLCommon) opResult(ctx context.Context, row *sql.Rows) (*fftypes.Opera
 	return &op, nil
 }
 
-func (s *SQLCommon) GetOperationByID(ctx context.Context, id *fftypes.UUID) (operation *fftypes.Operation, err error) {
+func (s *SQLCommon) GetOperationByID(ctx context.Context, namespace string, id *fftypes.UUID) (operation *core.Operation, err error) {
 
 	rows, _, err := s.query(ctx, operationsTable,
 		sq.Select(opColumns...).
 			From(operationsTable).
-			Where(sq.Eq{"id": id}),
+			Where(sq.Eq{"id": id, "namespace": namespace}),
 	)
 	if err != nil {
 		return nil, err
@@ -137,9 +138,9 @@ func (s *SQLCommon) GetOperationByID(ctx context.Context, id *fftypes.UUID) (ope
 	return op, nil
 }
 
-func (s *SQLCommon) GetOperations(ctx context.Context, filter database.Filter) (operation []*fftypes.Operation, fr *database.FilterResult, err error) {
+func (s *SQLCommon) GetOperations(ctx context.Context, namespace string, filter database.Filter) (operation []*core.Operation, fr *database.FilterResult, err error) {
 
-	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(opColumns...).From(operationsTable), filter, opFilterFieldMap, []interface{}{"sequence"})
+	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(opColumns...).From(operationsTable), filter, opFilterFieldMap, []interface{}{"sequence"}, sq.Eq{"namespace": namespace})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -150,7 +151,7 @@ func (s *SQLCommon) GetOperations(ctx context.Context, filter database.Filter) (
 	}
 	defer rows.Close()
 
-	ops := []*fftypes.Operation{}
+	ops := []*core.Operation{}
 	for rows.Next() {
 		op, err := s.opResult(ctx, rows)
 		if err != nil {
@@ -180,22 +181,29 @@ func (s *SQLCommon) UpdateOperation(ctx context.Context, ns string, id *fftypes.
 		sq.Eq{"namespace": ns},
 	})
 
-	_, err = s.updateTx(ctx, operationsTable, tx, query, func() {
-		s.callbacks.UUIDCollectionNSEvent(database.CollectionOperations, fftypes.ChangeEventTypeUpdated, ns, id)
+	ra, err := s.updateTx(ctx, operationsTable, tx, query, func() {
+		s.callbacks.UUIDCollectionNSEvent(database.CollectionOperations, core.ChangeEventTypeUpdated, ns, id)
 	})
 	if err != nil {
 		return err
+	}
+	if ra < 1 {
+		return i18n.NewError(ctx, coremsgs.Msg404NoResult)
 	}
 
 	return s.commitTx(ctx, tx, autoCommit)
 }
 
-func (s *SQLCommon) ResolveOperation(ctx context.Context, ns string, id *fftypes.UUID, status fftypes.OpStatus, errorMsg string, output fftypes.JSONObject) (err error) {
-	update := database.OperationQueryFactory.NewUpdate(ctx).
-		Set("status", status).
-		Set("error", errorMsg)
+func (s *SQLCommon) ResolveOperation(ctx context.Context, ns string, id *fftypes.UUID, status core.OpStatus, errorMsg *string, output fftypes.JSONObject) (err error) {
+	update := database.OperationQueryFactory.NewUpdate(ctx).S()
+	if status != "" {
+		update = update.Set("status", status)
+	}
+	if errorMsg != nil {
+		update = update.Set("error", *errorMsg)
+	}
 	if output != nil {
-		update.Set("output", output)
+		update = update.Set("output", output)
 	}
 	return s.UpdateOperation(ctx, ns, id, update)
 }

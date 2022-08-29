@@ -22,9 +22,10 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -68,14 +69,14 @@ func TestFFIE2EWithDB(t *testing.T) {
 		},
 	}
 
-	s.callbacks.On("UUIDCollectionNSEvent", database.CollectionFFIs, fftypes.ChangeEventTypeCreated, "ns1", ffi.ID).Return()
-	s.callbacks.On("UUIDCollectionNSEvent", database.CollectionFFIs, fftypes.ChangeEventTypeUpdated, "ns1", ffi.ID).Return()
+	s.callbacks.On("UUIDCollectionNSEvent", database.CollectionFFIs, core.ChangeEventTypeCreated, "ns1", ffi.ID).Return()
+	s.callbacks.On("UUIDCollectionNSEvent", database.CollectionFFIs, core.ChangeEventTypeUpdated, "ns1", ffi.ID).Return()
 
 	err := s.UpsertFFI(ctx, ffi)
 	assert.NoError(t, err)
 
 	// Check we get the correct fields back
-	dataRead, err := s.GetFFIByID(ctx, id)
+	dataRead, err := s.GetFFIByID(ctx, "ns1", id)
 	assert.NoError(t, err)
 	assert.NotNil(t, dataRead)
 	assert.Equal(t, ffi.ID, dataRead.ID)
@@ -90,7 +91,7 @@ func TestFFIE2EWithDB(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Check we get the correct fields back
-	dataRead, err = s.GetFFIByID(ctx, id)
+	dataRead, err = s.GetFFIByID(ctx, "ns1", id)
 	assert.NoError(t, err)
 	assert.NotNil(t, dataRead)
 	assert.Equal(t, ffi.ID, dataRead.ID)
@@ -148,7 +149,7 @@ func TestFFIDBFailScan(t *testing.T) {
 	s, mock := newMockProvider().init()
 	id := fftypes.NewUUID()
 	mock.ExpectQuery("SELECT .*").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("only one"))
-	_, err := s.GetFFIByID(context.Background(), id)
+	_, err := s.GetFFIByID(context.Background(), "ns1", id)
 	assert.Regexp(t, "FF10121", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -157,7 +158,7 @@ func TestFFIDBSelectFail(t *testing.T) {
 	s, mock := newMockProvider().init()
 	id := fftypes.NewUUID()
 	mock.ExpectQuery("SELECT .*").WillReturnError(fmt.Errorf("pop"))
-	_, err := s.GetFFIByID(context.Background(), id)
+	_, err := s.GetFFIByID(context.Background(), "ns1", id)
 	assert.Regexp(t, "pop", err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -166,7 +167,7 @@ func TestFFIDBNoRows(t *testing.T) {
 	s, mock := newMockProvider().init()
 	id := fftypes.NewUUID()
 	mock.ExpectQuery("SELECT .*").WillReturnRows(sqlmock.NewRows([]string{"id", "namespace", "name", "version"}))
-	_, err := s.GetFFIByID(context.Background(), id)
+	_, err := s.GetFFIByID(context.Background(), "ns1", id)
 	assert.NoError(t, err)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }

@@ -23,24 +23,26 @@ import (
 	"testing"
 
 	"github.com/hyperledger/firefly/mocks/contractmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/mocks/definitionsmocks"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestPostNewContractInterface(t *testing.T) {
 	o, r := newTestAPIServer()
-	mcm := &contractmocks.Manager{}
-	o.On("Contracts").Return(mcm)
-	input := fftypes.Datatype{}
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
+	mds := &definitionsmocks.Sender{}
+	o.On("Contracts").Return(&contractmocks.Manager{})
+	o.On("DefinitionSender").Return(mds)
+	input := core.Datatype{}
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(&input)
 	req := httptest.NewRequest("POST", "/api/v1/namespaces/ns1/contracts/interfaces", &buf)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mcm.On("BroadcastFFI", mock.Anything, "ns1", mock.AnythingOfType("*fftypes.FFI"), false).
-		Return(&fftypes.FFI{}, nil)
+	mds.On("DefineFFI", mock.Anything, mock.AnythingOfType("*fftypes.FFI"), false).Return(nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 202, res.Result().StatusCode)
@@ -48,17 +50,18 @@ func TestPostNewContractInterface(t *testing.T) {
 
 func TestPostNewContractInterfaceSync(t *testing.T) {
 	o, r := newTestAPIServer()
-	mcm := &contractmocks.Manager{}
-	o.On("Contracts").Return(mcm)
-	input := fftypes.Datatype{}
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
+	mds := &definitionsmocks.Sender{}
+	o.On("Contracts").Return(&contractmocks.Manager{})
+	o.On("DefinitionSender").Return(mds)
+	input := core.Datatype{}
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(&input)
 	req := httptest.NewRequest("POST", "/api/v1/namespaces/ns1/contracts/interfaces?confirm", &buf)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mcm.On("BroadcastFFI", mock.Anything, "ns1", mock.AnythingOfType("*fftypes.FFI"), true).
-		Return(&fftypes.FFI{}, nil)
+	mds.On("DefineFFI", mock.Anything, mock.AnythingOfType("*fftypes.FFI"), true).Return(nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)

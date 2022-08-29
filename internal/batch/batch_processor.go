@@ -26,28 +26,27 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly-common/pkg/retry"
 	"github.com/hyperledger/firefly/internal/data"
 	"github.com/hyperledger/firefly/internal/operations"
-	"github.com/hyperledger/firefly/internal/retry"
-	"github.com/hyperledger/firefly/internal/sysmessaging"
 	"github.com/hyperledger/firefly/internal/txcommon"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 type batchWork struct {
-	msg  *fftypes.Message
-	data fftypes.DataArray
+	msg  *core.Message
+	data core.DataArray
 }
 
 type batchProcessorConf struct {
 	DispatcherOptions
 	name           string
 	dispatcherName string
-	txType         fftypes.TransactionType
-	namespace      string
-	signer         fftypes.SignerRef
+	txType         core.TransactionType
+	signer         core.SignerRef
 	group          *fftypes.Bytes32
 	dispatch       DispatchHandler
 }
@@ -76,7 +75,6 @@ type FlushStatus struct {
 type batchProcessor struct {
 	ctx                context.Context
 	bm                 *batchManager
-	ni                 sysmessaging.LocalNodeInfo
 	data               data.Manager
 	database           database.Plugin
 	txHelper           txcommon.Helper
@@ -99,12 +97,12 @@ type nonceState struct {
 }
 
 type DispatchState struct {
-	Persisted      fftypes.BatchPersisted
-	Messages       []*fftypes.Message
-	Data           fftypes.DataArray
+	Persisted      core.BatchPersisted
+	Messages       []*core.Message
+	Data           core.DataArray
 	Pins           []*fftypes.Bytes32
 	noncesAssigned map[fftypes.Bytes32]*nonceState
-	msgPins        map[fftypes.UUID]fftypes.FFStringArray
+	msgPins        map[fftypes.UUID]core.FFStringArray
 }
 
 const batchSizeEstimateBase = int64(512)
@@ -116,7 +114,6 @@ func newBatchProcessor(bm *batchManager, conf *batchProcessorConf, baseRetryConf
 		ctx:       pCtx,
 		cancelCtx: cancelCtx,
 		bm:        bm,
-		ni:        bm.ni,
 		database:  bm.database,
 		data:      bm.data,
 		txHelper:  txHelper,
@@ -374,17 +371,20 @@ func (bp *batchProcessor) flush(overflow bool) error {
 
 func (bp *batchProcessor) initFlushState(id *fftypes.UUID, flushWork []*batchWork) *DispatchState {
 	state := &DispatchState{
-		Persisted: fftypes.BatchPersisted{
-			BatchHeader: fftypes.BatchHeader{
+		Persisted: core.BatchPersisted{
+			BatchHeader: core.BatchHeader{
 				ID:        id,
 				Type:      bp.conf.DispatcherOptions.BatchType,
-				Namespace: bp.conf.namespace,
+				Namespace: bp.bm.namespace,
 				SignerRef: bp.conf.signer,
 				Group:     bp.conf.group,
 				Created:   fftypes.Now(),
-				Node:      bp.ni.GetNodeUUID(bp.ctx),
 			},
 		},
+	}
+	localNode, err := bp.bm.identity.GetLocalNode(bp.ctx)
+	if err == nil && localNode != nil {
+		state.Persisted.BatchHeader.Node = localNode.ID
 	}
 	for _, w := range flushWork {
 		if w.msg != nil {
@@ -432,7 +432,7 @@ func (bp *batchProcessor) getNextNonce(ctx context.Context, state *DispatchState
 	return nonceState.latest, nil
 }
 
-func (bp *batchProcessor) maskContext(ctx context.Context, state *DispatchState, msg *fftypes.Message, topic string) (msgPinString string, contextOrPin *fftypes.Bytes32, err error) {
+func (bp *batchProcessor) maskContext(ctx context.Context, state *DispatchState, msg *core.Message, topic string) (msgPinString string, contextOrPin *fftypes.Bytes32, err error) {
 
 	hashBuilder := sha256.New()
 	hashBuilder.Write([]byte(topic))
@@ -484,9 +484,9 @@ func (bp *batchProcessor) maskContexts(ctx context.Context, state *DispatchState
 			log.L(ctx).Debugf("Message %s already has %d pins allocated", msg.Header.ID, len(msg.Pins))
 			continue
 		}
-		var pins fftypes.FFStringArray
+		var pins core.FFStringArray
 		if isPrivate {
-			pins = make(fftypes.FFStringArray, len(msg.Header.Topics))
+			pins = make(core.FFStringArray, len(msg.Header.Topics))
 			state.msgPins[*msg.Header.ID] = pins
 		}
 		for i, topic := range msg.Header.Topics {
@@ -507,7 +507,7 @@ func (bp *batchProcessor) flushNonceState(ctx context.Context, state *DispatchSt
 
 	// Flush all the assigned nonces to the DB
 	for hash, nonceState := range state.noncesAssigned {
-		dbNonce := &fftypes.Nonce{
+		dbNonce := &core.Nonce{
 			Hash:  &hash,
 			Nonce: nonceState.latest,
 		}
@@ -531,7 +531,7 @@ func (bp *batchProcessor) flushNonceState(ctx context.Context, state *DispatchSt
 	// message cache, until after the Retry/RunAsGroup has ended in sealBatch.
 	for _, msg := range state.Messages {
 		if pins, ok := state.msgPins[*msg.Header.ID]; ok {
-			if err := bp.database.UpdateMessage(ctx, msg.Header.ID,
+			if err := bp.database.UpdateMessage(ctx, bp.bm.namespace, msg.Header.ID,
 				database.MessageQueryFactory.NewUpdate(ctx).Set("pins", pins),
 			); err != nil {
 				return err
@@ -548,9 +548,9 @@ func (bp *batchProcessor) sealBatch(state *DispatchState) (err error) {
 
 			// Clear state from any previous retry. We need to do fresh queries against the DB for nonces.
 			state.noncesAssigned = make(map[fftypes.Bytes32]*nonceState)
-			state.msgPins = make(map[fftypes.UUID]fftypes.FFStringArray)
+			state.msgPins = make(map[fftypes.UUID]core.FFStringArray)
 
-			if bp.conf.txType == fftypes.TransactionTypeBatchPin {
+			if bp.conf.txType == core.TransactionTypeBatchPin {
 				// Generate a new Transaction, which will be used to record status of the associated transaction as it happens
 				if state.Pins, err = bp.maskContexts(ctx, state); err != nil {
 					return err
@@ -562,7 +562,7 @@ func (bp *batchProcessor) sealBatch(state *DispatchState) (err error) {
 			}
 
 			state.Persisted.TX.Type = bp.conf.txType
-			if state.Persisted.TX.ID, err = bp.txHelper.SubmitNewTransaction(ctx, state.Persisted.Namespace, bp.conf.txType); err != nil {
+			if state.Persisted.TX.ID, err = bp.txHelper.SubmitNewTransaction(ctx, bp.conf.txType); err != nil {
 				return err
 			}
 			manifest := state.Persisted.GenManifest(state.Messages, state.Data)
@@ -613,10 +613,10 @@ func (bp *batchProcessor) markPayloadDispatched(state *DispatchState) error {
 			for i, msg := range state.Messages {
 				msgIDs[i] = msg.Header.ID
 				msg.BatchID = state.Persisted.ID
-				if bp.conf.txType == fftypes.TransactionTypeBatchPin {
-					msg.State = fftypes.MessageStateSent
+				if bp.conf.txType == core.TransactionTypeBatchPin {
+					msg.State = core.MessageStateSent
 				} else {
-					msg.State = fftypes.MessageStateConfirmed
+					msg.State = core.MessageStateConfirmed
 					msg.Confirmed = confirmTime
 				}
 				// We don't want to have to read the DB again if we want to query for the batch ID, or pins,
@@ -626,33 +626,33 @@ func (bp *batchProcessor) markPayloadDispatched(state *DispatchState) error {
 			fb := database.MessageQueryFactory.NewFilter(ctx)
 			filter := fb.And(
 				fb.In("id", msgIDs),
-				fb.Eq("state", fftypes.MessageStateReady), // In the outside chance the next state transition happens first (which supersedes this)
+				fb.Eq("state", core.MessageStateReady), // In the outside chance the next state transition happens first (which supersedes this)
 			)
 
 			var allMsgsUpdate database.Update
-			if bp.conf.txType == fftypes.TransactionTypeBatchPin {
+			if bp.conf.txType == core.TransactionTypeBatchPin {
 				// Sent state waiting for confirm
 				allMsgsUpdate = database.MessageQueryFactory.NewUpdate(ctx).
-					Set("batch", state.Persisted.ID).      // Mark the batch they are in
-					Set("state", fftypes.MessageStateSent) // Set them sent, so they won't be picked up and re-sent after restart/rewind
+					Set("batch", state.Persisted.ID).   // Mark the batch they are in
+					Set("state", core.MessageStateSent) // Set them sent, so they won't be picked up and re-sent after restart/rewind
 			} else {
 				// Immediate confirmation if no batch pinning
 				allMsgsUpdate = database.MessageQueryFactory.NewUpdate(ctx).
 					Set("batch", state.Persisted.ID).
-					Set("state", fftypes.MessageStateConfirmed).
+					Set("state", core.MessageStateConfirmed).
 					Set("confirmed", confirmTime)
 			}
 
-			if err = bp.database.UpdateMessages(ctx, filter, allMsgsUpdate); err != nil {
+			if err = bp.database.UpdateMessages(ctx, bp.bm.namespace, filter, allMsgsUpdate); err != nil {
 				return err
 			}
 
-			if bp.conf.txType == fftypes.TransactionTypeUnpinned {
+			if bp.conf.txType == core.TransactionTypeUnpinned {
 				for _, msg := range state.Messages {
 					// Emit a confirmation event locally immediately
 					for _, topic := range msg.Header.Topics {
 						// One event per topic
-						event := fftypes.NewEvent(fftypes.EventTypeMessageConfirmed, state.Persisted.Namespace, msg.Header.ID, state.Persisted.TX.ID, topic)
+						event := core.NewEvent(core.EventTypeMessageConfirmed, state.Persisted.Namespace, msg.Header.ID, state.Persisted.TX.ID, topic)
 						event.Correlator = msg.Header.CID
 						if err := bp.database.InsertEvent(ctx, event); err != nil {
 							return err

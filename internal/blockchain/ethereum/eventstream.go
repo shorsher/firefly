@@ -21,18 +21,22 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/hyperledger/firefly-common/pkg/ffresty"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly-signer/pkg/abi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/pkg/ffresty"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
+	"github.com/karlseguin/ccache"
 )
 
 type streamManager struct {
-	client *resty.Client
-
-	fireFlySubscriptionFromBlock string
+	client   *resty.Client
+	cache    *ccache.Cache
+	cacheTTL time.Duration
 }
 
 type eventStream struct {
@@ -47,12 +51,20 @@ type eventStream struct {
 }
 
 type subscription struct {
-	ID        string               `json:"id"`
-	Name      string               `json:"name,omitempty"`
-	Stream    string               `json:"stream"`
-	FromBlock string               `json:"fromBlock"`
-	Address   string               `json:"address"`
-	Event     ABIElementMarshaling `json:"event"`
+	ID        string     `json:"id"`
+	Name      string     `json:"name,omitempty"`
+	Stream    string     `json:"stream"`
+	FromBlock string     `json:"fromBlock"`
+	Address   string     `json:"address"`
+	Event     *abi.Entry `json:"event"`
+}
+
+func newStreamManager(client *resty.Client, cache *ccache.Cache, cacheTTL time.Duration) *streamManager {
+	return &streamManager{
+		client:   client,
+		cache:    cache,
+		cacheTTL: cacheTTL,
+	}
 }
 
 func (s *streamManager) getEventStreams(ctx context.Context) (streams []*eventStream, err error) {
@@ -136,12 +148,38 @@ func (s *streamManager) getSubscriptions(ctx context.Context) (subs []*subscript
 	return subs, nil
 }
 
-func (s *streamManager) createSubscription(ctx context.Context, location *Location, stream, subName, fromBlock string, abi ABIElementMarshaling) (*subscription, error) {
+func (s *streamManager) getSubscription(ctx context.Context, subID string) (sub *subscription, err error) {
+	res, err := s.client.R().
+		SetContext(ctx).
+		SetResult(&sub).
+		Get(fmt.Sprintf("/subscriptions/%s", subID))
+	if err != nil || !res.IsSuccess() {
+		return nil, ffresty.WrapRestErr(ctx, res, err, coremsgs.MsgEthconnectRESTErr)
+	}
+	return sub, nil
+}
+
+func (s *streamManager) getSubscriptionName(ctx context.Context, subID string) (string, error) {
+	cached := s.cache.Get("sub:" + subID)
+	if cached != nil {
+		cached.Extend(s.cacheTTL)
+		return cached.Value().(string), nil
+	}
+
+	sub, err := s.getSubscription(ctx, subID)
+	if err != nil {
+		return "", err
+	}
+	s.cache.Set("sub:"+subID, sub.Name, s.cacheTTL)
+	return sub.Name, nil
+}
+
+func (s *streamManager) createSubscription(ctx context.Context, location *Location, stream, subName, fromBlock string, abi *abi.Entry) (*subscription, error) {
 	// Map FireFly "firstEvent" values to Ethereum "fromBlock" values
 	switch fromBlock {
-	case string(fftypes.SubOptsFirstEventOldest):
+	case string(core.SubOptsFirstEventOldest):
 		fromBlock = "0"
-	case string(fftypes.SubOptsFirstEventNewest):
+	case string(core.SubOptsFirstEventNewest):
 		fromBlock = "latest"
 	}
 	sub := subscription{
@@ -172,7 +210,7 @@ func (s *streamManager) deleteSubscription(ctx context.Context, subID string) er
 	return nil
 }
 
-func (s *streamManager) ensureFireFlySubscription(ctx context.Context, instancePath, stream string, abi ABIElementMarshaling) (sub *subscription, err error) {
+func (s *streamManager) ensureFireFlySubscription(ctx context.Context, namespace string, version int, instancePath, fromBlock, stream string, abi *abi.Entry) (sub *subscription, err error) {
 	// Include a hash of the instance path in the subscription, so if we ever point at a different
 	// contract configuration, we re-subscribe from block 0.
 	// We don't need full strength hashing, so just use the first 16 chars for readability.
@@ -183,28 +221,40 @@ func (s *streamManager) ensureFireFlySubscription(ctx context.Context, instanceP
 		return nil, err
 	}
 
-	subName := fmt.Sprintf("%s_%s", abi.Name, instanceUniqueHash)
+	legacyName := abi.Name
+	v1Name := fmt.Sprintf("%s_%s", abi.Name, instanceUniqueHash)
+	v2Name := fmt.Sprintf("%s_%s_%s", namespace, abi.Name, instanceUniqueHash)
 
 	for _, s := range existingSubs {
-		if s.Stream == stream && (s.Name == subName ||
-			/* Check for the plain name we used to use originally, before adding uniqueness qualifier.
-			   If one of these very early environments needed a new subscription, the existing one would need to
+		if s.Stream == stream {
+			/* Check for the deprecated names, before adding namespace uniqueness qualifier.
+			   NOTE: If one of these early environments needed a new subscription, the existing one would need to
 				 be deleted manually. */
-			s.Name == abi.Name) {
-			sub = s
+			if version == 1 {
+				if s.Name == legacyName {
+					log.L(ctx).Warnf("Subscription %s uses a legacy name format '%s' - expected '%s' instead", s.ID, legacyName, v1Name)
+					return s, nil
+				} else if s.Name == v1Name {
+					return s, nil
+				}
+			} else {
+				if s.Name == legacyName || s.Name == v1Name {
+					return nil, i18n.NewError(ctx, coremsgs.MsgInvalidSubscriptionForNetwork, s.Name, version)
+				} else if s.Name == v2Name {
+					return s, nil
+				}
+			}
 		}
 	}
 
-	location := &Location{
-		Address: instancePath,
+	name := v2Name
+	if version == 1 {
+		name = v1Name
 	}
-
-	if sub == nil {
-		if sub, err = s.createSubscription(ctx, location, stream, subName, s.fireFlySubscriptionFromBlock, abi); err != nil {
-			return nil, err
-		}
+	location := &Location{Address: instancePath}
+	if sub, err = s.createSubscription(ctx, location, stream, name, fromBlock, abi); err != nil {
+		return nil, err
 	}
-
 	log.L(ctx).Infof("%s subscription: %s", abi.Name, sub.ID)
 	return sub, nil
 }

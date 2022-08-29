@@ -19,22 +19,22 @@ package events
 import (
 	"context"
 	"database/sql/driver"
-	"encoding/json"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
 	"github.com/hyperledger/firefly/pkg/dataexchange"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 // Check data exchange peer the data came from, has been registered to the org listed in the batch.
 // Note the on-chain identity check is performed separately by the aggregator (across broadcast and private consistently).
-func (em *eventManager) checkReceivedOffchainIdentity(ctx context.Context, peerID, author string) (node *fftypes.Identity, err error) {
+func (em *eventManager) checkReceivedOffchainIdentity(ctx context.Context, peerID, author string) (node *core.Identity, err error) {
 	l := log.L(em.ctx)
 
 	// Resolve the node for the peer ID
-	node, err = em.identity.FindIdentityForVerifier(ctx, []fftypes.IdentityType{fftypes.IdentityTypeNode}, fftypes.SystemNamespace, &fftypes.VerifierRef{
-		Type:  fftypes.VerifierTypeFFDXPeerID,
+	node, err = em.identity.FindIdentityForVerifier(ctx, []core.IdentityType{core.IdentityTypeNode}, &core.VerifierRef{
+		Type:  core.VerifierTypeFFDXPeerID,
 		Value: peerID,
 	})
 	if err != nil {
@@ -76,15 +76,24 @@ func (em *eventManager) checkReceivedOffchainIdentity(ctx context.Context, peerI
 	return node, nil
 }
 
-func (em *eventManager) privateBatchReceived(peerID string, batch *fftypes.Batch, wrapperGroup *fftypes.Group) (manifest string, err error) {
+func (em *eventManager) privateBatchReceived(peerID string, batch *core.Batch, wrapperGroup *core.Group) (manifest string, err error) {
+	if em.multiparty == nil {
+		log.L(em.ctx).Errorf("Ignoring private batch from non-multiparty network!")
+		return "", nil
+	}
+	if batch.Namespace != em.namespace.RemoteName {
+		log.L(em.ctx).Debugf("Ignoring private batch from different namespace '%s'", batch.Namespace)
+		return "", nil
+	}
+	batch.Namespace = em.namespace.LocalName
 
 	// Retry for persistence errors (not validation errors)
 	err = em.retry.Do(em.ctx, "private batch received", func(attempt int) (bool, error) {
 		return true, em.database.RunAsGroup(em.ctx, func(ctx context.Context) error {
 			l := log.L(ctx)
 
-			if wrapperGroup != nil && batch.Payload.TX.Type == fftypes.TransactionTypeUnpinned {
-				valid, err := em.definitions.EnsureLocalGroup(ctx, wrapperGroup)
+			if wrapperGroup != nil && batch.Payload.TX.Type == core.TransactionTypeUnpinned {
+				valid, err := em.messaging.EnsureLocalGroup(ctx, wrapperGroup)
 				if err != nil {
 					return err
 				}
@@ -109,7 +118,7 @@ func (em *eventManager) privateBatchReceived(peerID string, batch *fftypes.Batch
 				return err // retry - persistBatch only returns retryable errors
 			}
 
-			if batch.Payload.TX.Type == fftypes.TransactionTypeUnpinned {
+			if batch.Payload.TX.Type == core.TransactionTypeUnpinned {
 				// We need to confirm all these messages immediately.
 				if err := em.markUnpinnedMessagesConfirmed(ctx, batch); err != nil {
 					return err
@@ -123,13 +132,13 @@ func (em *eventManager) privateBatchReceived(peerID string, batch *fftypes.Batch
 		return "", err
 	}
 	// Poke the aggregator to do its stuff - after we have committed the transaction so the pins are visible
-	if batch.Payload.TX.Type == fftypes.TransactionTypeBatchPin {
+	if batch.Payload.TX.Type == core.TransactionTypeBatchPin {
 		em.aggregator.queueBatchRewind(batch.ID)
 	}
 	return manifest, err
 }
 
-func (em *eventManager) markUnpinnedMessagesConfirmed(ctx context.Context, batch *fftypes.Batch) error {
+func (em *eventManager) markUnpinnedMessagesConfirmed(ctx context.Context, batch *core.Batch) error {
 
 	// Update all the messages in the batch with the batch ID
 	msgIDs := make([]driver.Value, len(batch.Payload.Messages))
@@ -139,23 +148,23 @@ func (em *eventManager) markUnpinnedMessagesConfirmed(ctx context.Context, batch
 	fb := database.MessageQueryFactory.NewFilter(ctx)
 	filter := fb.And(
 		fb.In("id", msgIDs),
-		fb.Eq("state", fftypes.MessageStatePending), // In the outside chance another state transition happens first (which supersedes this)
+		fb.Eq("state", core.MessageStatePending), // In the outside chance another state transition happens first (which supersedes this)
 	)
 
 	// Immediate confirmation if no transaction
 	update := database.MessageQueryFactory.NewUpdate(ctx).
 		Set("batch", batch.ID).
-		Set("state", fftypes.MessageStateConfirmed).
+		Set("state", core.MessageStateConfirmed).
 		Set("confirmed", fftypes.Now())
 
-	if err := em.database.UpdateMessages(ctx, filter, update); err != nil {
+	if err := em.database.UpdateMessages(ctx, em.namespace.LocalName, filter, update); err != nil {
 		return err
 	}
 
 	for _, msg := range batch.Payload.Messages {
 		for _, topic := range msg.Header.Topics {
 			// One event per topic
-			event := fftypes.NewEvent(fftypes.EventTypeMessageConfirmed, batch.Namespace, msg.Header.ID, batch.Payload.TX.ID, topic)
+			event := core.NewEvent(core.EventTypeMessageConfirmed, batch.Namespace, msg.Header.ID, batch.Payload.TX.ID, topic)
 			event.Correlator = msg.Header.CID
 			if err := em.database.InsertEvent(ctx, event); err != nil {
 				return err
@@ -174,7 +183,7 @@ func (em *eventManager) DXEvent(dx dataexchange.Plugin, event dataexchange.DXEve
 		// Batches are significant items of work in their own right, so get dispatched to their own routines
 		go em.messageReceived(dx, event)
 	default:
-		log.L(em.ctx).Errorf("Invalid DX event type from %s: %d", dx.Name(), event.Type())
+		log.L(em.ctx).Errorf("Invalid data exchange event type from %s: %d", dx.Name(), event.Type())
 		event.Ack() // still ack
 	}
 }
@@ -183,23 +192,9 @@ func (em *eventManager) messageReceived(dx dataexchange.Plugin, event dataexchan
 	l := log.L(em.ctx)
 
 	mr := event.MessageReceived()
+	l.Infof("Private batch received from %s peer '%s'", dx.Name(), mr.PeerID)
 
-	// De-serializae the transport wrapper
-	var wrapper *fftypes.TransportWrapper
-	err := json.Unmarshal(mr.Data, &wrapper)
-	if err != nil {
-		l.Errorf("Invalid transmission from %s peer '%s': %s", dx.Name(), mr.PeerID, err)
-		event.AckWithManifest("")
-		return
-	}
-	if wrapper.Batch == nil {
-		l.Errorf("Invalid transmission: nil batch")
-		event.AckWithManifest("")
-		return
-	}
-	l.Infof("Private batch received from %s peer '%s' (len=%d)", dx.Name(), mr.PeerID, len(mr.Data))
-
-	manifestString, err := em.privateBatchReceived(mr.PeerID, wrapper.Batch, wrapper.Group)
+	manifestString, err := em.privateBatchReceived(mr.PeerID, mr.Transport.Batch, mr.Transport.Group)
 	if err != nil {
 		l.Warnf("Exited while persisting batch: %s", err)
 		// We do NOT ack here as we broke out of the retry
@@ -213,14 +208,19 @@ func (em *eventManager) privateBlobReceived(dx dataexchange.Plugin, event dataex
 	log.L(em.ctx).Infof("Blob received event from data exchange %s: Peer='%s' Hash='%v' PayloadRef='%s'", dx.Name(), br.PeerID, &br.Hash, br.PayloadRef)
 
 	if br.PeerID == "" || len(br.PeerID) > 256 || br.PayloadRef == "" || len(br.PayloadRef) > 1024 {
-		log.L(em.ctx).Errorf("Invalid blob received event from data exhange: Peer='%s' Hash='%v' PayloadRef='%s'", br.PeerID, &br.Hash, br.PayloadRef)
+		log.L(em.ctx).Errorf("Invalid blob received event from data exchange: Peer='%s' Hash='%v' PayloadRef='%s'", br.PeerID, &br.Hash, br.PayloadRef)
+		event.Ack() // Still confirm the event
+		return
+	}
+	if br.Namespace != em.namespace.RemoteName {
+		log.L(em.ctx).Debugf("Ignoring blob from different namespace '%s'", br.Namespace)
 		event.Ack() // Still confirm the event
 		return
 	}
 
 	// Dispatch to the blob receiver for efficient batch DB operations
 	em.blobReceiver.blobReceived(em.ctx, &blobNotification{
-		blob: &fftypes.Blob{
+		blob: &core.Blob{
 			Peer:       br.PeerID,
 			PayloadRef: br.PayloadRef,
 			Hash:       &br.Hash,

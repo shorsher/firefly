@@ -19,18 +19,18 @@ package privatemessaging
 import (
 	"context"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
 	"github.com/hyperledger/firefly/internal/data"
-	"github.com/hyperledger/firefly/internal/sysmessaging"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly/internal/syncasync"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-func (pm *privateMessaging) NewMessage(ns string, in *fftypes.MessageInOut) sysmessaging.MessageSender {
+func (pm *privateMessaging) NewMessage(in *core.MessageInOut) syncasync.Sender {
 	message := &messageSender{
-		mgr:       pm,
-		namespace: ns,
+		mgr: pm,
 		msg: &data.NewMessage{
 			Message: in,
 		},
@@ -39,8 +39,9 @@ func (pm *privateMessaging) NewMessage(ns string, in *fftypes.MessageInOut) sysm
 	return message
 }
 
-func (pm *privateMessaging) SendMessage(ctx context.Context, ns string, in *fftypes.MessageInOut, waitConfirm bool) (out *fftypes.Message, err error) {
-	message := pm.NewMessage(ns, in)
+func (pm *privateMessaging) SendMessage(ctx context.Context, in *core.MessageInOut, waitConfirm bool) (out *core.Message, err error) {
+	message := pm.NewMessage(in)
+	in.Header.Type = core.MessageTypePrivate
 	if pm.metrics.IsMetricsEnabled() {
 		pm.metrics.MessageSubmitted(&in.Message)
 	}
@@ -52,24 +53,23 @@ func (pm *privateMessaging) SendMessage(ctx context.Context, ns string, in *ffty
 	return &in.Message, err
 }
 
-func (pm *privateMessaging) RequestReply(ctx context.Context, ns string, in *fftypes.MessageInOut) (*fftypes.MessageInOut, error) {
+func (pm *privateMessaging) RequestReply(ctx context.Context, in *core.MessageInOut) (*core.MessageInOut, error) {
 	if in.Header.Tag == "" {
 		return nil, i18n.NewError(ctx, coremsgs.MsgRequestReplyTagRequired)
 	}
 	if in.Header.CID != nil {
 		return nil, i18n.NewError(ctx, coremsgs.MsgRequestCannotHaveCID)
 	}
-	message := pm.NewMessage(ns, in)
-	return pm.syncasync.WaitForReply(ctx, ns, in.Header.ID, message.Send)
+	message := pm.NewMessage(in)
+	return pm.syncasync.WaitForReply(ctx, in.Header.ID, message.Send)
 }
 
 // sendMethod is the specific operation requested of the messageSender.
 // To minimize duplication and group database operations, there is a single internal flow with subtle differences for each method.
 type messageSender struct {
-	mgr       *privateMessaging
-	namespace string
-	msg       *data.NewMessage
-	resolved  bool
+	mgr      *privateMessaging
+	msg      *data.NewMessage
+	resolved bool
 }
 
 type sendMethod int
@@ -98,18 +98,19 @@ func (s *messageSender) SendAndWait(ctx context.Context) error {
 func (s *messageSender) setDefaults() {
 	msg := s.msg.Message
 	msg.Header.ID = fftypes.NewUUID()
-	msg.Header.Namespace = s.namespace
-	msg.State = fftypes.MessageStateReady
+	msg.Header.Namespace = s.mgr.namespace.RemoteName
+	msg.LocalNamespace = s.mgr.namespace.LocalName
+	msg.State = core.MessageStateReady
 	if msg.Header.Type == "" {
-		msg.Header.Type = fftypes.MessageTypePrivate
+		msg.Header.Type = core.MessageTypePrivate
 	}
 	switch msg.Header.TxType {
-	case fftypes.TransactionTypeUnpinned, fftypes.TransactionTypeNone:
+	case core.TransactionTypeUnpinned, core.TransactionTypeNone:
 		// "unpinned" used to be called "none" (before we introduced batching + a TX on unppinned sends)
-		msg.Header.TxType = fftypes.TransactionTypeUnpinned
+		msg.Header.TxType = core.TransactionTypeUnpinned
 	default:
 		// the only other valid option is "batch_pin"
-		msg.Header.TxType = fftypes.TransactionTypeBatchPin
+		msg.Header.TxType = core.TransactionTypeBatchPin
 	}
 }
 
@@ -130,9 +131,10 @@ func (s *messageSender) resolveAndSend(ctx context.Context, method sendMethod) e
 }
 
 func (s *messageSender) resolve(ctx context.Context) error {
-	// Resolve the sending identity
 	msg := s.msg.Message
-	if err := s.mgr.identity.ResolveInputSigningIdentity(ctx, msg.Header.Namespace, &msg.Header.SignerRef); err != nil {
+
+	// Resolve the sending identity
+	if err := s.mgr.identity.ResolveInputSigningIdentity(ctx, &msg.Header.SignerRef); err != nil {
 		return i18n.WrapError(ctx, err, coremsgs.MsgAuthorInvalid)
 	}
 
@@ -152,7 +154,7 @@ func (s *messageSender) sendInternal(ctx context.Context, method sendMethod) err
 	if method == methodSendAndWait {
 		// Pass it to the sync-async handler to wait for the confirmation to come back in.
 		// NOTE: Our caller makes sure we are not in a RunAsGroup (which would be bad)
-		out, err := s.mgr.syncasync.WaitForMessage(ctx, s.namespace, msg.Header.ID, s.Send)
+		out, err := s.mgr.syncasync.WaitForMessage(ctx, msg.Header.ID, s.Send)
 		if out != nil {
 			*msg = *out
 		}
@@ -171,7 +173,7 @@ func (s *messageSender) sendInternal(ctx context.Context, method sendMethod) err
 	if err := s.mgr.data.WriteNewMessage(ctx, s.msg); err != nil {
 		return err
 	}
-	log.L(ctx).Infof("Sent private message %s:%s sequence=%d", msg.Header.Namespace, msg.Header.ID, msg.Sequence)
+	log.L(ctx).Infof("Sent private message %s sequence=%d", msg.Header.ID, msg.Sequence)
 
 	return nil
 }

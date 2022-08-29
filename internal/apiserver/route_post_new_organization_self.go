@@ -20,28 +20,33 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/internal/orchestrator"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var postNewOrganizationSelf = &oapispec.Route{
+var postNewOrganizationSelf = &ffapi.Route{
 	Name:       "postNewOrganizationSelf",
 	Path:       "network/organizations/self",
 	Method:     http.MethodPost,
 	PathParams: nil,
-	QueryParams: []*oapispec.QueryParam{
+	QueryParams: []*ffapi.QueryParam{
 		{Name: "confirm", Description: coremsgs.APIConfirmQueryParam, IsBool: true, Example: "true"},
 	},
-	FilterFactory:   nil,
 	Description:     coremsgs.APIEndpointsPostNewOrganizationSelf,
-	JSONInputValue:  func() interface{} { return &fftypes.EmptyInput{} },
-	JSONOutputValue: func() interface{} { return &fftypes.Identity{} },
+	JSONInputValue:  func() interface{} { return &core.EmptyInput{} },
+	JSONOutputValue: func() interface{} { return &core.Identity{} },
 	JSONOutputCodes: []int{http.StatusAccepted, http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		waitConfirm := strings.EqualFold(r.QP["confirm"], "true")
-		r.SuccessStatus = syncRetcode(waitConfirm)
-		org, err := getOr(r.Ctx).NetworkMap().RegisterNodeOrganization(r.Ctx, waitConfirm)
-		return org, err
+	Extensions: &coreExtensions{
+		EnabledIf: func(or orchestrator.Orchestrator) bool {
+			return or.MultiParty() != nil
+		},
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			waitConfirm := strings.EqualFold(r.QP["confirm"], "true")
+			r.SuccessStatus = syncRetcode(waitConfirm)
+			org, err := cr.or.NetworkMap().RegisterNodeOrganization(cr.ctx, waitConfirm)
+			return org, err
+		},
 	},
 }

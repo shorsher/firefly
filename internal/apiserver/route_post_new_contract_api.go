@@ -20,30 +20,34 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/internal/orchestrator"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var postNewContractAPI = &oapispec.Route{
-	Name:   "postNewContractAPI",
-	Path:   "namespaces/{ns}/apis",
-	Method: http.MethodPost,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
-	QueryParams: []*oapispec.QueryParam{
+var postNewContractAPI = &ffapi.Route{
+	Name:       "postNewContractAPI",
+	Path:       "apis",
+	Method:     http.MethodPost,
+	PathParams: nil,
+	QueryParams: []*ffapi.QueryParam{
 		{Name: "confirm", Description: coremsgs.APIConfirmQueryParam, IsBool: true, Example: "true"},
 	},
-	FilterFactory:   nil,
 	Description:     coremsgs.APIEndpointsPostNewContractAPI,
-	JSONInputValue:  func() interface{} { return &fftypes.ContractAPI{} },
-	JSONOutputValue: func() interface{} { return &fftypes.ContractAPI{} },
+	JSONInputValue:  func() interface{} { return &core.ContractAPI{} },
+	JSONOutputValue: func() interface{} { return &core.ContractAPI{} },
 	JSONOutputCodes: []int{http.StatusOK, http.StatusAccepted},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		waitConfirm := strings.EqualFold(r.QP["confirm"], "true")
-		r.SuccessStatus = syncRetcode(waitConfirm)
-		return getOr(r.Ctx).Contracts().BroadcastContractAPI(r.Ctx, r.APIBaseURL, r.PP["ns"], r.Input.(*fftypes.ContractAPI), waitConfirm)
+	Extensions: &coreExtensions{
+		EnabledIf: func(or orchestrator.Orchestrator) bool {
+			return or.Contracts() != nil
+		},
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			waitConfirm := strings.EqualFold(r.QP["confirm"], "true")
+			r.SuccessStatus = syncRetcode(waitConfirm)
+			api := r.Input.(*core.ContractAPI)
+			err = cr.or.DefinitionSender().DefineContractAPI(cr.ctx, cr.apiBaseURL, api, waitConfirm)
+			return api, err
+		},
 	},
 }

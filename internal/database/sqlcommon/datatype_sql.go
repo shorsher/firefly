@@ -22,11 +22,12 @@ import (
 	"fmt"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 var (
@@ -48,7 +49,7 @@ var (
 
 const datatypesTable = "datatypes"
 
-func (s *SQLCommon) UpsertDatatype(ctx context.Context, datatype *fftypes.Datatype, allowExisting bool) (err error) {
+func (s *SQLCommon) UpsertDatatype(ctx context.Context, datatype *core.Datatype, allowExisting bool) (err error) {
 	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
 	if err != nil {
 		return err
@@ -61,7 +62,10 @@ func (s *SQLCommon) UpsertDatatype(ctx context.Context, datatype *fftypes.Dataty
 		datatypeRows, _, err := s.queryTx(ctx, datatypesTable, tx,
 			sq.Select("id").
 				From(datatypesTable).
-				Where(sq.Eq{"id": datatype.ID}),
+				Where(sq.Eq{
+					"namespace": datatype.Namespace,
+					"id":        datatype.ID,
+				}),
 		)
 		if err != nil {
 			return err
@@ -77,7 +81,6 @@ func (s *SQLCommon) UpsertDatatype(ctx context.Context, datatype *fftypes.Dataty
 			sq.Update(datatypesTable).
 				Set("message_id", datatype.Message).
 				Set("validator", string(datatype.Validator)).
-				Set("namespace", datatype.Namespace).
 				Set("name", datatype.Name).
 				Set("version", datatype.Version).
 				Set("hash", datatype.Hash).
@@ -85,7 +88,7 @@ func (s *SQLCommon) UpsertDatatype(ctx context.Context, datatype *fftypes.Dataty
 				Set("value", datatype.Value).
 				Where(sq.Eq{"id": datatype.ID}),
 			func() {
-				s.callbacks.UUIDCollectionNSEvent(database.CollectionDataTypes, fftypes.ChangeEventTypeUpdated, datatype.Namespace, datatype.ID)
+				s.callbacks.UUIDCollectionNSEvent(database.CollectionDataTypes, core.ChangeEventTypeUpdated, datatype.Namespace, datatype.ID)
 			},
 		); err != nil {
 			return err
@@ -106,7 +109,7 @@ func (s *SQLCommon) UpsertDatatype(ctx context.Context, datatype *fftypes.Dataty
 					datatype.Value,
 				),
 			func() {
-				s.callbacks.UUIDCollectionNSEvent(database.CollectionDataTypes, fftypes.ChangeEventTypeCreated, datatype.Namespace, datatype.ID)
+				s.callbacks.UUIDCollectionNSEvent(database.CollectionDataTypes, core.ChangeEventTypeCreated, datatype.Namespace, datatype.ID)
 			},
 		); err != nil {
 			return err
@@ -116,8 +119,8 @@ func (s *SQLCommon) UpsertDatatype(ctx context.Context, datatype *fftypes.Dataty
 	return s.commitTx(ctx, tx, autoCommit)
 }
 
-func (s *SQLCommon) datatypeResult(ctx context.Context, row *sql.Rows) (*fftypes.Datatype, error) {
-	var datatype fftypes.Datatype
+func (s *SQLCommon) datatypeResult(ctx context.Context, row *sql.Rows) (*core.Datatype, error) {
+	var datatype core.Datatype
 	err := row.Scan(
 		&datatype.ID,
 		&datatype.Message,
@@ -135,7 +138,7 @@ func (s *SQLCommon) datatypeResult(ctx context.Context, row *sql.Rows) (*fftypes
 	return &datatype, nil
 }
 
-func (s *SQLCommon) getDatatypeEq(ctx context.Context, eq sq.Eq, textName string) (message *fftypes.Datatype, err error) {
+func (s *SQLCommon) getDatatypeEq(ctx context.Context, eq sq.Eq, textName string) (message *core.Datatype, err error) {
 
 	rows, _, err := s.query(ctx, datatypesTable,
 		sq.Select(datatypeColumns...).
@@ -160,17 +163,19 @@ func (s *SQLCommon) getDatatypeEq(ctx context.Context, eq sq.Eq, textName string
 	return datatype, nil
 }
 
-func (s *SQLCommon) GetDatatypeByID(ctx context.Context, id *fftypes.UUID) (message *fftypes.Datatype, err error) {
-	return s.getDatatypeEq(ctx, sq.Eq{"id": id}, id.String())
+func (s *SQLCommon) GetDatatypeByID(ctx context.Context, namespace string, id *fftypes.UUID) (message *core.Datatype, err error) {
+	return s.getDatatypeEq(ctx, sq.Eq{"id": id, "namespace": namespace}, id.String())
 }
 
-func (s *SQLCommon) GetDatatypeByName(ctx context.Context, ns, name, version string) (message *fftypes.Datatype, err error) {
+func (s *SQLCommon) GetDatatypeByName(ctx context.Context, ns, name, version string) (message *core.Datatype, err error) {
 	return s.getDatatypeEq(ctx, sq.Eq{"namespace": ns, "name": name, "version": version}, fmt.Sprintf("%s:%s", ns, name))
 }
 
-func (s *SQLCommon) GetDatatypes(ctx context.Context, filter database.Filter) (message []*fftypes.Datatype, res *database.FilterResult, err error) {
+func (s *SQLCommon) GetDatatypes(ctx context.Context, namespace string, filter database.Filter) (message []*core.Datatype, res *database.FilterResult, err error) {
 
-	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(datatypeColumns...).From(datatypesTable), filter, datatypeFilterFieldMap, []interface{}{"sequence"})
+	query, fop, fi, err := s.filterSelect(
+		ctx, "", sq.Select(datatypeColumns...).From(datatypesTable),
+		filter, datatypeFilterFieldMap, []interface{}{"sequence"}, sq.Eq{"namespace": namespace})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -181,7 +186,7 @@ func (s *SQLCommon) GetDatatypes(ctx context.Context, filter database.Filter) (m
 	}
 	defer rows.Close()
 
-	datatypes := []*fftypes.Datatype{}
+	datatypes := []*core.Datatype{}
 	for rows.Next() {
 		datatype, err := s.datatypeResult(ctx, rows)
 		if err != nil {
@@ -192,26 +197,4 @@ func (s *SQLCommon) GetDatatypes(ctx context.Context, filter database.Filter) (m
 
 	return datatypes, s.queryRes(ctx, datatypesTable, tx, fop, fi), err
 
-}
-
-func (s *SQLCommon) UpdateDatatype(ctx context.Context, id *fftypes.UUID, update database.Update) (err error) {
-
-	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer s.rollbackTx(ctx, tx, autoCommit)
-
-	query, err := s.buildUpdate(sq.Update(datatypesTable), update, datatypeFilterFieldMap)
-	if err != nil {
-		return err
-	}
-	query = query.Where(sq.Eq{"id": id})
-
-	_, err = s.updateTx(ctx, datatypesTable, tx, query, nil /* no change events for filter based updates */)
-	if err != nil {
-		return err
-	}
-
-	return s.commitTx(ctx, tx, autoCommit)
 }

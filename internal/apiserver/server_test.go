@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -29,64 +30,70 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/gorilla/mux"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/httpserver"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
 	"github.com/hyperledger/firefly/internal/coreconfig"
-	"github.com/hyperledger/firefly/internal/coremsgs"
 	"github.com/hyperledger/firefly/internal/metrics"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/mocks/admineventsmocks"
+	"github.com/hyperledger/firefly/mocks/apiservermocks"
 	"github.com/hyperledger/firefly/mocks/contractmocks"
-	"github.com/hyperledger/firefly/mocks/oapiffimocks"
+	"github.com/hyperledger/firefly/mocks/namespacemocks"
 	"github.com/hyperledger/firefly/mocks/orchestratormocks"
-	"github.com/hyperledger/firefly/pkg/config"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/httpserver"
-	"github.com/hyperledger/firefly/pkg/i18n"
+	"github.com/hyperledger/firefly/mocks/spieventsmocks"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 const configDir = "../../test/data/config"
 
-func newTestServer() (*orchestratormocks.Orchestrator, *apiServer) {
+func newTestServer() (*namespacemocks.Manager, *orchestratormocks.Orchestrator, *apiServer) {
+	coreconfig.Reset()
 	InitConfig()
-	mor := &orchestratormocks.Orchestrator{}
+	mgr := &namespacemocks.Manager{}
+	o := &orchestratormocks.Orchestrator{}
+	mgr.On("Orchestrator", "default").Return(o).Maybe()
+	mgr.On("Orchestrator", "mynamespace").Return(o).Maybe()
+	mgr.On("Orchestrator", "ns1").Return(o).Maybe()
 	as := &apiServer{
-		apiTimeout:    5 * time.Second,
-		ffiSwaggerGen: &oapiffimocks.FFISwaggerGen{},
+		apiTimeout:     5 * time.Second,
+		maxFilterLimit: 100,
+		ffiSwaggerGen:  &apiservermocks.FFISwaggerGen{},
 	}
-	return mor, as
+	return mgr, o, as
 }
 
 func newTestAPIServer() (*orchestratormocks.Orchestrator, *mux.Router) {
-	mor, as := newTestServer()
-	r := as.createMuxRouter(context.Background(), mor)
-	return mor, r
+	mgr, o, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
+	return o, r
 }
 
-func newTestAdminServer() (*orchestratormocks.Orchestrator, *mux.Router) {
-	mor, as := newTestServer()
-	mae := &admineventsmocks.Manager{}
-	mor.On("AdminEvents").Return(mae)
-	r := as.createAdminMuxRouter(mor)
-	return mor, r
+func newTestSPIServer() (*orchestratormocks.Orchestrator, *mux.Router) {
+	config.Set(coreconfig.NamespacesDefault, "default")
+	mgr, o, as := newTestServer()
+	mae := &spieventsmocks.Manager{}
+	mgr.On("SPIEvents").Return(mae)
+	r := as.createAdminMuxRouter(mgr)
+	return o, r
 }
 
 func TestStartStopServer(t *testing.T) {
 	coreconfig.Reset()
 	metrics.Clear()
 	InitConfig()
-	apiConfigPrefix.Set(httpserver.HTTPConfPort, 0)
-	adminConfigPrefix.Set(httpserver.HTTPConfPort, 0)
+	apiConfig.Set(httpserver.HTTPConfPort, 0)
+	spiConfig.Set(httpserver.HTTPConfPort, 0)
 	config.Set(coreconfig.UIPath, "test")
-	config.Set(coreconfig.AdminEnabled, true)
+	config.Set(coreconfig.SPIEnabled, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // server will immediately shut down
 	as := NewAPIServer()
-	mor := &orchestratormocks.Orchestrator{}
-	mor.On("IsPreInit").Return(false)
-	mae := &admineventsmocks.Manager{}
-	mor.On("AdminEvents").Return(mae)
-	err := as.Serve(ctx, mor)
+	mgr := &namespacemocks.Manager{}
+	mae := &spieventsmocks.Manager{}
+	mgr.On("SPIEvents").Return(mae)
+	err := as.Serve(ctx, mgr)
 	assert.NoError(t, err)
 }
 
@@ -94,50 +101,47 @@ func TestStartAPIFail(t *testing.T) {
 	coreconfig.Reset()
 	metrics.Clear()
 	InitConfig()
-	apiConfigPrefix.Set(httpserver.HTTPConfAddress, "...://")
+	apiConfig.Set(httpserver.HTTPConfAddress, "...://")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // server will immediately shut down
 	as := NewAPIServer()
-	mor := &orchestratormocks.Orchestrator{}
-	mor.On("IsPreInit").Return(false)
-	err := as.Serve(ctx, mor)
-	assert.Regexp(t, "FF10104", err)
+	mgr := &namespacemocks.Manager{}
+	err := as.Serve(ctx, mgr)
+	assert.Regexp(t, "FF00151", err)
 }
 
 func TestStartAdminFail(t *testing.T) {
 	coreconfig.Reset()
 	metrics.Clear()
 	InitConfig()
-	adminConfigPrefix.Set(httpserver.HTTPConfAddress, "...://")
-	config.Set(coreconfig.AdminEnabled, true)
+	spiConfig.Set(httpserver.HTTPConfAddress, "...://")
+	config.Set(coreconfig.SPIEnabled, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // server will immediately shut down
 	as := NewAPIServer()
-	mor := &orchestratormocks.Orchestrator{}
-	mor.On("IsPreInit").Return(true)
-	mae := &admineventsmocks.Manager{}
-	mor.On("AdminEvents").Return(mae)
-	err := as.Serve(ctx, mor)
-	assert.Regexp(t, "FF10104", err)
+	mgr := &namespacemocks.Manager{}
+	mae := &spieventsmocks.Manager{}
+	mgr.On("SPIEvents").Return(mae)
+	err := as.Serve(ctx, mgr)
+	assert.Regexp(t, "FF00151", err)
 }
 
 func TestStartAdminWSHandler(t *testing.T) {
 	coreconfig.Reset()
 	metrics.Clear()
 	InitConfig()
-	adminConfigPrefix.Set(httpserver.HTTPConfAddress, "...://")
-	config.Set(coreconfig.AdminEnabled, true)
+	spiConfig.Set(httpserver.HTTPConfAddress, "...://")
+	config.Set(coreconfig.SPIEnabled, true)
 	as := NewAPIServer().(*apiServer)
-	mor := &orchestratormocks.Orchestrator{}
-	mor.On("IsPreInit").Return(true)
-	mae := &admineventsmocks.Manager{}
-	mor.On("AdminEvents").Return(mae)
+	mgr := &namespacemocks.Manager{}
+	mae := &spieventsmocks.Manager{}
+	mgr.On("SPIEvents").Return(mae)
 	mae.On("ServeHTTPWebSocketListener", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		res := args[0].(http.ResponseWriter)
 		res.WriteHeader(200)
 	}).Return()
 	res := httptest.NewRecorder()
-	as.adminWSHandler(mor).ServeHTTP(res, httptest.NewRequest("GET", "/", nil))
+	as.spiWSHandler(mgr).ServeHTTP(res, httptest.NewRequest("GET", "/", nil))
 	assert.Equal(t, 200, res.Result().StatusCode)
 }
 
@@ -145,172 +149,21 @@ func TestStartMetricsFail(t *testing.T) {
 	coreconfig.Reset()
 	metrics.Clear()
 	InitConfig()
-	metricsConfigPrefix.Set(httpserver.HTTPConfAddress, "...://")
+	metricsConfig.Set(httpserver.HTTPConfAddress, "...://")
 	config.Set(coreconfig.MetricsEnabled, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // server will immediately shut down
 	as := NewAPIServer()
-	mor := &orchestratormocks.Orchestrator{}
-	mor.On("IsPreInit").Return(true)
-	mae := &admineventsmocks.Manager{}
-	mor.On("AdminEvents").Return(mae)
-	err := as.Serve(ctx, mor)
-	assert.Regexp(t, "FF10104", err)
-}
-
-func TestJSONHTTPServePOST201(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "POST",
-		JSONInputValue:  func() interface{} { return make(map[string]interface{}) },
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{201},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			assert.Equal(t, "value1", r.Input.(map[string]interface{})["input1"])
-			return map[string]interface{}{"output1": "value2"}, nil
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-
-	b, _ := json.Marshal(map[string]interface{}{"input1": "value1"})
-	res, err := http.Post(fmt.Sprintf("http://%s/test", s.Listener.Addr()), "application/json", bytes.NewReader(b))
-	assert.NoError(t, err)
-	assert.Equal(t, 201, res.StatusCode)
-	var resJSON map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&resJSON)
-	assert.Equal(t, "value2", resJSON["output1"])
-}
-
-func TestJSONHTTPResponseEncodeFail(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "GET",
-		JSONInputValue:  nil,
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{200},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			v := map[string]interface{}{"unserializable": map[bool]interface{}{true: "not in JSON"}}
-			return v, nil
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-
-	b, _ := json.Marshal(map[string]interface{}{"input1": "value1"})
-	res, err := http.Post(fmt.Sprintf("http://%s/test", s.Listener.Addr()), "application/json", bytes.NewReader(b))
-	assert.NoError(t, err)
-	var resJSON map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&resJSON)
-	assert.Regexp(t, "FF10107", resJSON["error"])
-}
-
-func TestJSONHTTPNilResponseNon204(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "GET",
-		JSONInputValue:  nil,
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{200},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			return nil, nil
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-
-	b, _ := json.Marshal(map[string]interface{}{"input1": "value1"})
-	res, err := http.Post(fmt.Sprintf("http://%s/test", s.Listener.Addr()), "application/json", bytes.NewReader(b))
-	assert.NoError(t, err)
-	assert.Equal(t, 404, res.StatusCode)
-	var resJSON map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&resJSON)
-	assert.Regexp(t, "FF10143", resJSON["error"])
-}
-
-func TestJSONHTTPDefault500Error(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "GET",
-		JSONInputValue:  nil,
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{200},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			return nil, fmt.Errorf("pop")
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-
-	b, _ := json.Marshal(map[string]interface{}{"input1": "value1"})
-	res, err := http.Post(fmt.Sprintf("http://%s/test", s.Listener.Addr()), "application/json", bytes.NewReader(b))
-	assert.NoError(t, err)
-	assert.Equal(t, 500, res.StatusCode)
-	var resJSON map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&resJSON)
-	assert.Regexp(t, "pop", resJSON["error"])
-}
-
-func TestStatusCodeHintMapping(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "GET",
-		JSONInputValue:  nil,
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{200},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			return nil, i18n.NewError(r.Ctx, coremsgs.MsgResponseMarshalError)
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-
-	b, _ := json.Marshal(map[string]interface{}{"input1": "value1"})
-	res, err := http.Post(fmt.Sprintf("http://%s/test", s.Listener.Addr()), "application/json", bytes.NewReader(b))
-	assert.NoError(t, err)
-	assert.Equal(t, 400, res.StatusCode)
-	var resJSON map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&resJSON)
-	assert.Regexp(t, "FF10107", resJSON["error"])
-}
-
-func TestStatusInvalidContentType(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "POST",
-		JSONInputValue:  nil,
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{204},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			return nil, nil
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-
-	res, err := http.Post(fmt.Sprintf("http://%s/test", s.Listener.Addr()), "application/text", bytes.NewReader([]byte{}))
-	assert.NoError(t, err)
-	assert.Equal(t, 415, res.StatusCode)
-	var resJSON map[string]interface{}
-	json.NewDecoder(res.Body).Decode(&resJSON)
-	assert.Regexp(t, "FF10130", resJSON["error"])
+	mgr := &namespacemocks.Manager{}
+	mae := &spieventsmocks.Manager{}
+	mgr.On("SPIEvents").Return(mae)
+	err := as.Serve(ctx, mgr)
+	assert.Regexp(t, "FF00151", err)
 }
 
 func TestNotFound(t *testing.T) {
-	_, as := newTestServer()
-	handler := as.apiWrapper(as.notFoundHandler)
+	_, _, as := newTestServer()
+	handler := as.handlerFactory().APIWrapper(as.notFoundHandler)
 	s := httptest.NewServer(http.HandlerFunc(handler))
 	defer s.Close()
 
@@ -322,72 +175,37 @@ func TestNotFound(t *testing.T) {
 	assert.Regexp(t, "FF10109", resJSON["error"])
 }
 
-func TestTimeout(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "POST",
-		JSONInputValue:  nil,
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{204},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			<-r.Ctx.Done()
-			return nil, fmt.Errorf("timeout error")
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/test", s.Listener.Addr()), bytes.NewReader([]byte(``)))
-	assert.NoError(t, err)
-	req.Header.Set("Request-Timeout", "250us")
-	res, err := http.DefaultClient.Do(req)
-	assert.NoError(t, err)
-	assert.Equal(t, 408, res.StatusCode)
+func TestFilterTooMany(t *testing.T) {
+	mgr, o, as := newTestServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
+	handler := as.routeHandler(as.handlerFactory(), mgr, "", getBatches)
+
+	req := httptest.NewRequest("GET", "http://localhost:12345/test?limit=99999999999", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	assert.Equal(t, 400, res.Result().StatusCode)
 	var resJSON map[string]interface{}
 	json.NewDecoder(res.Body).Decode(&resJSON)
-	assert.Regexp(t, "FF10260.*timeout error", resJSON["error"])
+	assert.Regexp(t, "FF10184", resJSON["error"])
 }
 
-func TestBadTimeout(t *testing.T) {
-	mo, as := newTestServer()
-	handler := as.routeHandler(mo, "http://localhost:5000/api/v1", &oapispec.Route{
-		Name:            "testRoute",
-		Path:            "/test",
-		Method:          "POST",
-		JSONInputValue:  nil,
-		JSONOutputValue: func() interface{} { return make(map[string]interface{}) },
-		JSONOutputCodes: []int{204},
-		JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-			return nil, nil
-		},
-	})
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s/test", s.Listener.Addr()), bytes.NewReader([]byte(``)))
-	assert.NoError(t, err)
-	req.Header.Set("Request-Timeout", "bad timeout")
-	res, err := http.DefaultClient.Do(req)
-	assert.NoError(t, err)
-	assert.Equal(t, 204, res.StatusCode)
-}
+func TestUnauthorized(t *testing.T) {
+	mgr, o, as := newTestServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(i18n.NewError(context.Background(), i18n.MsgUnauthorized))
+	handler := as.routeHandler(as.handlerFactory(), mgr, "", getBatches)
 
-func TestSwaggerUI(t *testing.T) {
-	_, as := newTestServer()
-	handler := as.apiWrapper(as.swaggerUIHandler("http://localhost:5000/api/v1"))
-	s := httptest.NewServer(http.HandlerFunc(handler))
-	defer s.Close()
-
-	res, err := http.Get(fmt.Sprintf("http://%s/api", s.Listener.Addr()))
-	assert.NoError(t, err)
-	assert.Equal(t, 200, res.StatusCode)
-	b, _ := ioutil.ReadAll(res.Body)
-	assert.Regexp(t, "html", string(b))
+	req := httptest.NewRequest("GET", "http://localhost:12345/test", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	assert.Equal(t, 401, res.Result().StatusCode)
+	var resJSON map[string]interface{}
+	json.NewDecoder(res.Body).Decode(&resJSON)
+	assert.Regexp(t, "FF00169", resJSON["error"])
 }
 
 func TestSwaggerYAML(t *testing.T) {
-	_, as := newTestServer()
-	handler := as.apiWrapper(as.swaggerHandler(as.swaggerGenerator(routes, "http://localhost:12345/api/v1")))
+	_, _, as := newTestServer()
+	handler := as.handlerFactory().APIWrapper(as.swaggerHandler(as.swaggerGenerator(routes, "http://localhost:12345/api/v1")))
 	s := httptest.NewServer(http.HandlerFunc(handler))
 	defer s.Close()
 
@@ -402,7 +220,8 @@ func TestSwaggerYAML(t *testing.T) {
 }
 
 func TestSwaggerJSON(t *testing.T) {
-	_, r := newTestAPIServer()
+	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	s := httptest.NewServer(r)
 	defer s.Close()
 
@@ -415,11 +234,11 @@ func TestSwaggerJSON(t *testing.T) {
 }
 
 func TestSwaggerAdminJSON(t *testing.T) {
-	_, r := newTestAdminServer()
+	_, r := newTestSPIServer()
 	s := httptest.NewServer(r)
 	defer s.Close()
 
-	res, err := http.Get(fmt.Sprintf("http://%s/admin/api/swagger.json", s.Listener.Addr()))
+	res, err := http.Get(fmt.Sprintf("http://%s/spi/swagger.json", s.Listener.Addr()))
 	assert.NoError(t, err)
 	assert.Equal(t, 200, res.StatusCode)
 	b, _ := ioutil.ReadAll(res.Body)
@@ -447,33 +266,23 @@ func TestWaitForServerStop(t *testing.T) {
 	assert.EqualError(t, err, "pop3")
 }
 
-func TestGetTimeoutMax(t *testing.T) {
-	_, as := newTestServer()
-	as.apiMaxTimeout = 1 * time.Second
-	req, err := http.NewRequest("GET", "http://test.example.com", bytes.NewReader([]byte(``)))
-	req.Header.Set("Request-Timeout", "1h")
-	assert.NoError(t, err)
-	timeout := as.getTimeout(req)
-	assert.Equal(t, 1*time.Second, timeout)
-}
-
 func TestContractAPISwaggerJSON(t *testing.T) {
-	o, as := newTestServer()
-	r := as.createMuxRouter(context.Background(), o)
+	mgr, o, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
 	mcm := &contractmocks.Manager{}
 	o.On("Contracts").Return(mcm)
-	mffi := as.ffiSwaggerGen.(*oapiffimocks.FFISwaggerGen)
+	mffi := as.ffiSwaggerGen.(*apiservermocks.FFISwaggerGen)
 	s := httptest.NewServer(r)
 	defer s.Close()
 
 	ffi := &fftypes.FFI{}
-	api := &fftypes.ContractAPI{
+	api := &core.ContractAPI{
 		Interface: &fftypes.FFIReference{
 			ID: fftypes.NewUUID(),
 		},
 	}
 
-	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "default", "my-api").Return(api, nil)
+	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "my-api").Return(api, nil)
 	mcm.On("GetFFIByIDWithChildren", mock.Anything, api.Interface.ID).Return(ffi, nil)
 	mffi.On("Generate", mock.Anything, "http://127.0.0.1:5000/api/v1/namespaces/default/apis/my-api", api, ffi).Return(&openapi3.T{})
 
@@ -483,14 +292,14 @@ func TestContractAPISwaggerJSON(t *testing.T) {
 }
 
 func TestContractAPISwaggerJSONGetAPIFail(t *testing.T) {
-	o, as := newTestServer()
-	r := as.createMuxRouter(context.Background(), o)
+	mgr, o, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
 	mcm := &contractmocks.Manager{}
 	o.On("Contracts").Return(mcm)
 	s := httptest.NewServer(r)
 	defer s.Close()
 
-	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "default", "my-api").Return(nil, fmt.Errorf("pop"))
+	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "my-api").Return(nil, fmt.Errorf("pop"))
 
 	res, err := http.Get(fmt.Sprintf("http://%s/api/v1/namespaces/default/apis/my-api/api/swagger.json", s.Listener.Addr()))
 	assert.NoError(t, err)
@@ -498,14 +307,14 @@ func TestContractAPISwaggerJSONGetAPIFail(t *testing.T) {
 }
 
 func TestContractAPISwaggerJSONGetAPINotFound(t *testing.T) {
-	o, as := newTestServer()
-	r := as.createMuxRouter(context.Background(), o)
+	mgr, o, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
 	mcm := &contractmocks.Manager{}
 	o.On("Contracts").Return(mcm)
 	s := httptest.NewServer(r)
 	defer s.Close()
 
-	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "default", "my-api").Return(nil, nil)
+	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "my-api").Return(nil, nil)
 
 	res, err := http.Get(fmt.Sprintf("http://%s/api/v1/namespaces/default/apis/my-api/api/swagger.json", s.Listener.Addr()))
 	assert.NoError(t, err)
@@ -513,20 +322,20 @@ func TestContractAPISwaggerJSONGetAPINotFound(t *testing.T) {
 }
 
 func TestContractAPISwaggerJSONGetFFIFail(t *testing.T) {
-	o, as := newTestServer()
-	r := as.createMuxRouter(context.Background(), o)
+	mgr, o, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
 	mcm := &contractmocks.Manager{}
 	o.On("Contracts").Return(mcm)
 	s := httptest.NewServer(r)
 	defer s.Close()
 
-	api := &fftypes.ContractAPI{
+	api := &core.ContractAPI{
 		Interface: &fftypes.FFIReference{
 			ID: fftypes.NewUUID(),
 		},
 	}
 
-	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "default", "my-api").Return(api, nil)
+	mcm.On("GetContractAPI", mock.Anything, "http://127.0.0.1:5000/api/v1", "my-api").Return(api, nil)
 	mcm.On("GetFFIByIDWithChildren", mock.Anything, api.Interface.ID).Return(nil, fmt.Errorf("pop"))
 
 	res, err := http.Get(fmt.Sprintf("http://%s/api/v1/namespaces/default/apis/my-api/api/swagger.json", s.Listener.Addr()))
@@ -534,8 +343,24 @@ func TestContractAPISwaggerJSONGetFFIFail(t *testing.T) {
 	assert.Equal(t, 500, res.StatusCode)
 }
 
+func TestContractAPISwaggerJSONBadNamespace(t *testing.T) {
+	mgr, o, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
+	mcm := &contractmocks.Manager{}
+	o.On("Contracts").Return(mcm)
+	s := httptest.NewServer(r)
+	defer s.Close()
+
+	mgr.On("Orchestrator", "BAD").Return(nil)
+
+	res, err := http.Get(fmt.Sprintf("http://%s/api/v1/namespaces/BAD/apis/my-api/api/swagger.json", s.Listener.Addr()))
+	assert.NoError(t, err)
+	assert.Equal(t, 404, res.StatusCode)
+}
+
 func TestContractAPISwaggerUI(t *testing.T) {
-	_, r := newTestAPIServer()
+	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	s := httptest.NewServer(r)
 	defer s.Close()
 
@@ -544,4 +369,88 @@ func TestContractAPISwaggerUI(t *testing.T) {
 	assert.Equal(t, 200, res.StatusCode)
 	b, _ := ioutil.ReadAll(res.Body)
 	assert.Regexp(t, "html", string(b))
+}
+
+func TestJSONBadNamespace(t *testing.T) {
+	mgr, _, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
+	s := httptest.NewServer(r)
+	defer s.Close()
+
+	mgr.On("Orchestrator", "BAD").Return(nil)
+
+	var b bytes.Buffer
+	req := httptest.NewRequest("GET", "/api/v1/namespaces/BAD/apis", &b)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	res := httptest.NewRecorder()
+
+	r.ServeHTTP(res, req)
+
+	assert.Equal(t, 404, res.Result().StatusCode)
+}
+
+func TestFormDataBadNamespace(t *testing.T) {
+	mgr, _, as := newTestServer()
+	r := as.createMuxRouter(context.Background(), mgr)
+	s := httptest.NewServer(r)
+	defer s.Close()
+
+	mgr.On("Orchestrator", "BAD").Return(nil)
+
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	writer, err := w.CreateFormFile("file", "filename.ext")
+	assert.NoError(t, err)
+	writer.Write([]byte(`some data`))
+	w.Close()
+	req := httptest.NewRequest("POST", "/api/v1/namespaces/BAD/data", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	res := httptest.NewRecorder()
+
+	r.ServeHTTP(res, req)
+
+	assert.Equal(t, 404, res.Result().StatusCode)
+}
+
+func TestJSONDisabledRoute(t *testing.T) {
+	mgr, o, as := newTestServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
+	r := as.createMuxRouter(context.Background(), mgr)
+	s := httptest.NewServer(r)
+	defer s.Close()
+
+	o.On("PrivateMessaging").Return(nil)
+
+	var b bytes.Buffer
+	req := httptest.NewRequest("GET", "/api/v1/namespaces/ns1/groups", &b)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	res := httptest.NewRecorder()
+
+	r.ServeHTTP(res, req)
+
+	assert.Equal(t, 400, res.Result().StatusCode)
+}
+
+func TestFormDataDisabledRoute(t *testing.T) {
+	mgr, o, as := newTestServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
+	r := as.createMuxRouter(context.Background(), mgr)
+	s := httptest.NewServer(r)
+	defer s.Close()
+
+	o.On("MultiParty").Return(nil)
+
+	var b bytes.Buffer
+	w := multipart.NewWriter(&b)
+	writer, err := w.CreateFormFile("file", "filename.ext")
+	assert.NoError(t, err)
+	writer.Write([]byte(`some data`))
+	w.Close()
+	req := httptest.NewRequest("POST", "/api/v1/namespaces/ns1/data", &b)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	res := httptest.NewRecorder()
+
+	r.ServeHTTP(res, req)
+
+	assert.Equal(t, 400, res.Result().StatusCode)
 }

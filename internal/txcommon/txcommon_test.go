@@ -20,15 +20,15 @@ import (
 	"context"
 	"fmt"
 	"testing"
-	"time"
 
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/internal/coreconfig"
 	"github.com/hyperledger/firefly/internal/data"
 	"github.com/hyperledger/firefly/mocks/databasemocks"
 	"github.com/hyperledger/firefly/mocks/datamocks"
-	"github.com/hyperledger/firefly/pkg/config"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 	"github.com/karlseguin/ccache"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -36,8 +36,9 @@ import (
 
 func NewTestTransactionHelper(di database.Plugin, dm data.Manager) (Helper, *ccache.Cache, *ccache.Cache) {
 	t := &transactionHelper{
-		database: di,
-		data:     dm,
+		namespace: "ns1",
+		database:  di,
+		data:      dm,
 	}
 	t.transactionCache = ccache.New(
 		// We use a LRU cache with a size-aware max
@@ -56,23 +57,23 @@ func TestSubmitNewTransactionOK(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	var txidInserted *fftypes.UUID
-	mdi.On("InsertTransaction", ctx, mock.MatchedBy(func(transaction *fftypes.Transaction) bool {
+	mdi.On("InsertTransaction", ctx, mock.MatchedBy(func(transaction *core.Transaction) bool {
 		txidInserted = transaction.ID
 		assert.NotNil(t, transaction.ID)
 		assert.Equal(t, "ns1", transaction.Namespace)
-		assert.Equal(t, fftypes.TransactionTypeBatchPin, transaction.Type)
+		assert.Equal(t, core.TransactionTypeBatchPin, transaction.Type)
 		assert.Empty(t, transaction.BlockchainIDs)
 		return true
 	})).Return(nil)
-	mdi.On("InsertEvent", ctx, mock.MatchedBy(func(e *fftypes.Event) bool {
-		return e.Type == fftypes.EventTypeTransactionSubmitted && e.Reference.Equals(txidInserted)
+	mdi.On("InsertEvent", ctx, mock.MatchedBy(func(e *core.Event) bool {
+		return e.Type == core.EventTypeTransactionSubmitted && e.Reference.Equals(txidInserted)
 	})).Return(nil)
 
-	txidReturned, err := txHelper.SubmitNewTransaction(ctx, "ns1", fftypes.TransactionTypeBatchPin)
+	txidReturned, err := txHelper.SubmitNewTransaction(ctx, core.TransactionTypeBatchPin)
 	assert.NoError(t, err)
 	assert.Equal(t, *txidInserted, *txidReturned)
 
@@ -84,12 +85,12 @@ func TestSubmitNewTransactionFail(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	mdi.On("InsertTransaction", ctx, mock.Anything).Return(fmt.Errorf("pop"))
 
-	_, err := txHelper.SubmitNewTransaction(ctx, "ns1", fftypes.TransactionTypeBatchPin)
+	_, err := txHelper.SubmitNewTransaction(ctx, core.TransactionTypeBatchPin)
 	assert.Regexp(t, "pop", err)
 
 	mdi.AssertExpectations(t)
@@ -100,13 +101,13 @@ func TestSubmitNewTransactionEventFail(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	mdi.On("InsertTransaction", ctx, mock.Anything).Return(nil)
 	mdi.On("InsertEvent", ctx, mock.Anything).Return(fmt.Errorf("pop"))
 
-	_, err := txHelper.SubmitNewTransaction(ctx, "ns1", fftypes.TransactionTypeBatchPin)
+	_, err := txHelper.SubmitNewTransaction(ctx, core.TransactionTypeBatchPin)
 	assert.Regexp(t, "pop", err)
 
 	mdi.AssertExpectations(t)
@@ -117,20 +118,20 @@ func TestPersistTransactionNew(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(nil, nil)
-	mdi.On("InsertTransaction", ctx, mock.MatchedBy(func(transaction *fftypes.Transaction) bool {
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(nil, nil)
+	mdi.On("InsertTransaction", ctx, mock.MatchedBy(func(transaction *core.Transaction) bool {
 		assert.Equal(t, txid, transaction.ID)
 		assert.Equal(t, "ns1", transaction.Namespace)
-		assert.Equal(t, fftypes.TransactionTypeBatchPin, transaction.Type)
-		assert.Equal(t, fftypes.FFStringArray{"0x222222"}, transaction.BlockchainIDs)
+		assert.Equal(t, core.TransactionTypeBatchPin, transaction.Type)
+		assert.Equal(t, core.FFStringArray{"0x222222"}, transaction.BlockchainIDs)
 		return true
 	})).Return(nil)
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "0x222222")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "0x222222")
 	assert.NoError(t, err)
 	assert.True(t, valid)
 
@@ -142,14 +143,14 @@ func TestPersistTransactionNewInserTFail(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(nil, nil)
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(nil, nil)
 	mdi.On("InsertTransaction", ctx, mock.Anything).Return(fmt.Errorf("pop"))
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "0x222222")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "0x222222")
 	assert.Regexp(t, "pop", err)
 	assert.False(t, valid)
 
@@ -161,20 +162,20 @@ func TestPersistTransactionExistingAddBlockchainID(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(&fftypes.Transaction{
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(&core.Transaction{
 		ID:            txid,
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeBatchPin,
+		Type:          core.TransactionTypeBatchPin,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}, nil)
-	mdi.On("UpdateTransaction", ctx, txid, mock.Anything).Return(nil)
+	mdi.On("UpdateTransaction", ctx, "ns1", txid, mock.Anything).Return(nil)
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "0x222222")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "0x222222")
 	assert.NoError(t, err)
 	assert.True(t, valid)
 
@@ -186,20 +187,20 @@ func TestPersistTransactionExistingUpdateFail(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(&fftypes.Transaction{
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(&core.Transaction{
 		ID:            txid,
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeBatchPin,
+		Type:          core.TransactionTypeBatchPin,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}, nil)
-	mdi.On("UpdateTransaction", ctx, txid, mock.Anything).Return(fmt.Errorf("pop"))
+	mdi.On("UpdateTransaction", ctx, "ns1", txid, mock.Anything).Return(fmt.Errorf("pop"))
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "0x222222")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "0x222222")
 	assert.Regexp(t, "pop", err)
 	assert.False(t, valid)
 
@@ -211,19 +212,19 @@ func TestPersistTransactionExistingNoChange(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(&fftypes.Transaction{
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(&core.Transaction{
 		ID:            txid,
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeBatchPin,
+		Type:          core.TransactionTypeBatchPin,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}, nil)
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "0x111111")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "0x111111")
 	assert.NoError(t, err)
 	assert.True(t, valid)
 
@@ -235,19 +236,19 @@ func TestPersistTransactionExistingNoBlockchainID(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(&fftypes.Transaction{
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(&core.Transaction{
 		ID:            txid,
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeBatchPin,
+		Type:          core.TransactionTypeBatchPin,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}, nil)
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "")
 	assert.NoError(t, err)
 	assert.True(t, valid)
 
@@ -259,38 +260,14 @@ func TestPersistTransactionExistingLookupFail(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(nil, fmt.Errorf("pop"))
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(nil, fmt.Errorf("pop"))
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "")
 	assert.Regexp(t, "pop", err)
-	assert.False(t, valid)
-
-	mdi.AssertExpectations(t)
-
-}
-
-func TestPersistTransactionExistingMismatchNS(t *testing.T) {
-
-	mdi := &databasemocks.Plugin{}
-	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
-	ctx := context.Background()
-
-	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(&fftypes.Transaction{
-		ID:            txid,
-		Namespace:     "ns2",
-		Type:          fftypes.TransactionTypeBatchPin,
-		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
-	}, nil)
-
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "")
-	assert.NoError(t, err)
 	assert.False(t, valid)
 
 	mdi.AssertExpectations(t)
@@ -301,19 +278,19 @@ func TestPersistTransactionExistingMismatchType(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(&fftypes.Transaction{
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(&core.Transaction{
 		ID:            txid,
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeContractInvoke,
+		Type:          core.TransactionTypeContractInvoke,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}, nil)
 
-	valid, err := txHelper.PersistTransaction(ctx, "ns1", txid, fftypes.TransactionTypeBatchPin, "")
+	valid, err := txHelper.PersistTransaction(ctx, txid, core.TransactionTypeBatchPin, "")
 	assert.NoError(t, err)
 	assert.False(t, valid)
 
@@ -325,17 +302,17 @@ func TestAddBlockchainTX(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
-	tx := &fftypes.Transaction{
+	tx := &core.Transaction{
 		ID:            fftypes.NewUUID(),
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeContractInvoke,
+		Type:          core.TransactionTypeContractInvoke,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}
-	mdi.On("UpdateTransaction", ctx, tx.ID, mock.MatchedBy(func(u database.Update) bool {
+	mdi.On("UpdateTransaction", ctx, "ns1", tx.ID, mock.MatchedBy(func(u database.Update) bool {
 		info, _ := u.Finalize()
 		assert.Equal(t, 1, len(info.SetOperations))
 		assert.Equal(t, "blockchainids", info.SetOperations[0].Field)
@@ -355,17 +332,17 @@ func TestAddBlockchainTXUpdateFail(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
-	tx := &fftypes.Transaction{
+	tx := &core.Transaction{
 		ID:            fftypes.NewUUID(),
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeContractInvoke,
+		Type:          core.TransactionTypeContractInvoke,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}
-	mdi.On("UpdateTransaction", ctx, tx.ID, mock.Anything).Return(fmt.Errorf("pop"))
+	mdi.On("UpdateTransaction", ctx, "ns1", tx.ID, mock.Anything).Return(fmt.Errorf("pop"))
 
 	err := txHelper.AddBlockchainTX(ctx, tx, "abc")
 	assert.EqualError(t, err, "pop")
@@ -378,15 +355,15 @@ func TestAddBlockchainTXUnchanged(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
-	tx := &fftypes.Transaction{
+	tx := &core.Transaction{
 		ID:            fftypes.NewUUID(),
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeContractInvoke,
+		Type:          core.TransactionTypeContractInvoke,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}
 
 	err := txHelper.AddBlockchainTX(ctx, tx, "0x111111")
@@ -398,27 +375,21 @@ func TestGetTransactionByIDCached(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper, txCache, _ := NewTestTransactionHelper(mdi, mdm)
+	txHelper, _, _ := NewTestTransactionHelper(mdi, mdm)
 	ctx := context.Background()
 
 	txid := fftypes.NewUUID()
-	mdi.On("GetTransactionByID", ctx, txid).Return(&fftypes.Transaction{
+	mdi.On("GetTransactionByID", ctx, "ns1", txid).Return(&core.Transaction{
 		ID:            txid,
 		Namespace:     "ns1",
-		Type:          fftypes.TransactionTypeContractInvoke,
+		Type:          core.TransactionTypeContractInvoke,
 		Created:       fftypes.Now(),
-		BlockchainIDs: fftypes.FFStringArray{"0x111111"},
+		BlockchainIDs: core.FFStringArray{"0x111111"},
 	}, nil).Once()
-
-	previousTxCacheSize := txCache.ItemCount()
 
 	tx, err := txHelper.GetTransactionByIDCached(ctx, txid)
 	assert.NoError(t, err)
 	assert.Equal(t, txid, tx.ID)
-
-	for txCache.ItemCount() <= previousTxCacheSize {
-		time.Sleep(time.Millisecond * 1)
-	}
 
 	tx, err = txHelper.GetTransactionByIDCached(ctx, txid)
 	assert.NoError(t, err)
@@ -432,11 +403,11 @@ func TestGetBlockchainEventByIDCached(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	evID := fftypes.NewUUID()
-	mdi.On("GetBlockchainEventByID", ctx, evID).Return(&fftypes.BlockchainEvent{
+	mdi.On("GetBlockchainEventByID", ctx, "ns1", evID).Return(&core.BlockchainEvent{
 		ID:        evID,
 		Namespace: "ns1",
 	}, nil).Once()
@@ -457,11 +428,11 @@ func TestGetBlockchainEventByIDNil(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	evID := fftypes.NewUUID()
-	mdi.On("GetBlockchainEventByID", ctx, evID).Return(nil, nil)
+	mdi.On("GetBlockchainEventByID", ctx, "ns1", evID).Return(nil, nil)
 
 	chainEvent, err := txHelper.GetBlockchainEventByIDCached(ctx, evID)
 	assert.NoError(t, err)
@@ -475,11 +446,11 @@ func TestGetBlockchainEventByIDErr(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	evID := fftypes.NewUUID()
-	mdi.On("GetBlockchainEventByID", ctx, evID).Return(nil, fmt.Errorf("pop"))
+	mdi.On("GetBlockchainEventByID", ctx, "ns1", evID).Return(nil, fmt.Errorf("pop"))
 
 	_, err := txHelper.GetBlockchainEventByIDCached(ctx, evID)
 	assert.Regexp(t, "pop", err)
@@ -492,11 +463,11 @@ func TestInsertGetBlockchainEventCached(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	evID := fftypes.NewUUID()
-	chainEvent := &fftypes.BlockchainEvent{
+	chainEvent := &core.BlockchainEvent{
 		ID:        evID,
 		Namespace: "ns1",
 	}
@@ -517,11 +488,11 @@ func TestInsertGetBlockchainEventErr(t *testing.T) {
 
 	mdi := &databasemocks.Plugin{}
 	mdm := &datamocks.Manager{}
-	txHelper := NewTransactionHelper(mdi, mdm)
+	txHelper := NewTransactionHelper("ns1", mdi, mdm)
 	ctx := context.Background()
 
 	evID := fftypes.NewUUID()
-	chainEvent := &fftypes.BlockchainEvent{
+	chainEvent := &core.BlockchainEvent{
 		ID:        evID,
 		Namespace: "ns1",
 	}

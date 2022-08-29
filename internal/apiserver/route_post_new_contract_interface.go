@@ -20,30 +20,34 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/internal/orchestrator"
 )
 
-var postNewContractInterface = &oapispec.Route{
-	Name:   "postNewContractInterface",
-	Path:   "namespaces/{ns}/contracts/interfaces",
-	Method: http.MethodPost,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
-	QueryParams: []*oapispec.QueryParam{
+var postNewContractInterface = &ffapi.Route{
+	Name:       "postNewContractInterface",
+	Path:       "contracts/interfaces",
+	Method:     http.MethodPost,
+	PathParams: nil,
+	QueryParams: []*ffapi.QueryParam{
 		{Name: "confirm", Description: coremsgs.APIConfirmQueryParam, IsBool: true, Example: "true"},
 	},
-	FilterFactory:   nil,
 	Description:     coremsgs.APIEndpointsPostNewContractInterface,
 	JSONInputValue:  func() interface{} { return &fftypes.FFI{} },
 	JSONOutputValue: func() interface{} { return &fftypes.FFI{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		waitConfirm := strings.EqualFold(r.QP["confirm"], "true")
-		r.SuccessStatus = syncRetcode(waitConfirm)
-		return getOr(r.Ctx).Contracts().BroadcastFFI(r.Ctx, r.PP["ns"], r.Input.(*fftypes.FFI), waitConfirm)
+	Extensions: &coreExtensions{
+		EnabledIf: func(or orchestrator.Orchestrator) bool {
+			return or.Contracts() != nil
+		},
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			waitConfirm := strings.EqualFold(r.QP["confirm"], "true")
+			r.SuccessStatus = syncRetcode(waitConfirm)
+			ffi := r.Input.(*fftypes.FFI)
+			err = cr.or.DefinitionSender().DefineFFI(cr.ctx, ffi, waitConfirm)
+			return ffi, err
+		},
 	},
 }

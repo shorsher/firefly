@@ -20,32 +20,31 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var getMsgByID = &oapispec.Route{
+var getMsgByID = &ffapi.Route{
 	Name:   "getMsgByID",
-	Path:   "namespaces/{ns}/messages/{msgid}",
+	Path:   "messages/{msgid}",
 	Method: http.MethodGet,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
+	PathParams: []*ffapi.PathParam{
 		{Name: "msgid", Description: coremsgs.APIParamsMessageID},
 	},
-	QueryParams: []*oapispec.QueryParam{
+	QueryParams: []*ffapi.QueryParam{
 		{Name: "fetchdata", IsBool: true, Description: coremsgs.APIFetchDataDesc},
 	},
-	FilterFactory:   nil,
 	Description:     coremsgs.APIEndpointsGetMsgByID,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return &fftypes.MessageInOut{} }, // can include full values
+	JSONOutputValue: func() interface{} { return &core.MessageInOut{} }, // can include full values
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		if strings.EqualFold(r.QP["data"], "true") || strings.EqualFold(r.QP["fetchdata"], "true") {
-			return getOr(r.Ctx).GetMessageByIDWithData(r.Ctx, r.PP["ns"], r.PP["msgid"])
-		}
-		return getOr(r.Ctx).GetMessageByID(r.Ctx, r.PP["ns"], r.PP["msgid"])
+	Extensions: &coreExtensions{
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			if strings.EqualFold(r.QP["data"], "true") || strings.EqualFold(r.QP["fetchdata"], "true") {
+				return cr.or.GetMessageByIDWithData(cr.ctx, r.PP["msgid"])
+			}
+			return cr.or.GetMessageByID(cr.ctx, r.PP["msgid"])
+		},
 	},
 }

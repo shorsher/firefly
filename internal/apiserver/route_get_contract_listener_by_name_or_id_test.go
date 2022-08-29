@@ -20,14 +20,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/mocks/contractmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestGetContractListenerByNameOrID(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mcm := &contractmocks.Manager{}
 	o.On("Contracts").Return(mcm)
 	id := fftypes.NewUUID()
@@ -35,8 +37,8 @@ func TestGetContractListenerByNameOrID(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mcm.On("GetContractListenerByNameOrID", mock.Anything, "mynamespace", id.String()).
-		Return(&fftypes.ContractListener{}, nil)
+	mcm.On("GetContractListenerByNameOrID", mock.Anything, id.String()).
+		Return(&core.ContractListener{}, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)

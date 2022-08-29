@@ -19,13 +19,12 @@ package eifactory
 import (
 	"context"
 
+	"github.com/hyperledger/firefly-common/pkg/i18n"
 	"github.com/hyperledger/firefly/internal/coremsgs"
 	"github.com/hyperledger/firefly/internal/events/system"
 	"github.com/hyperledger/firefly/internal/events/webhooks"
 	"github.com/hyperledger/firefly/internal/events/websockets"
-	"github.com/hyperledger/firefly/pkg/config"
 	"github.com/hyperledger/firefly/pkg/events"
-	"github.com/hyperledger/firefly/pkg/i18n"
 )
 
 var plugins = []events.Plugin{
@@ -39,12 +38,6 @@ var pluginsByName = make(map[string]events.Plugin)
 func init() {
 	for _, p := range plugins {
 		pluginsByName[p.Name()] = p
-	}
-}
-
-func InitPrefix(prefix config.Prefix) {
-	for _, plugin := range plugins {
-		plugin.InitPrefix(prefix.SubPrefix(plugin.Name()))
 	}
 }
 

@@ -17,9 +17,9 @@
 package ethereum
 
 import (
-	"github.com/hyperledger/firefly/pkg/config"
-	"github.com/hyperledger/firefly/pkg/ffresty"
-	"github.com/hyperledger/firefly/pkg/wsclient"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/ffresty"
+	"github.com/hyperledger/firefly-common/pkg/wsclient"
 )
 
 const (
@@ -36,10 +36,8 @@ const (
 )
 
 const (
-	// EthconnectConfigKey is a sub-key in the config to contain all the ethconnect specific config,
+	// EthconnectConfigKey is a sub-key in the config to contain all the ethconnect specific config
 	EthconnectConfigKey = "ethconnect"
-	// EthconnectConfigInstancePath is the ethereum address of the contract
-	EthconnectConfigInstancePath = "instance"
 	// EthconnectConfigTopic is the websocket listen topic that the node should register on, which is important if there are multiple
 	// nodes using a single ethconnect
 	EthconnectConfigTopic = "topic"
@@ -51,8 +49,10 @@ const (
 	EthconnectPrefixShort = "prefixShort"
 	// EthconnectPrefixLong is used in HTTP headers in requests to ethconnect
 	EthconnectPrefixLong = "prefixLong"
-	// EthconnectConfigFromBlock is the configuration of the first block to listen to when creating the listener for the FireFly contract
-	EthconnectConfigFromBlock = "fromBlock"
+	// EthconnectConfigInstanceDeprecated is the ethereum address of the FireFly contract
+	EthconnectConfigInstanceDeprecated = "instance"
+	// EthconnectConfigFromBlockDeprecated is the configuration of the first block to listen to when creating the listener for the FireFly contract
+	EthconnectConfigFromBlockDeprecated = "fromBlock"
 
 	// AddressResolverConfigKey is a sub-key in the config to contain an address resolver config.
 	AddressResolverConfigKey = "addressResolver"
@@ -75,22 +75,22 @@ const (
 	FFTMConfigKey = "fftm"
 )
 
-func (e *Ethereum) InitPrefix(prefix config.Prefix) {
-	ethconnectConf := prefix.SubPrefix(EthconnectConfigKey)
-	wsclient.InitPrefix(ethconnectConf)
-	ethconnectConf.AddKnownKey(EthconnectConfigInstancePath)
-	ethconnectConf.AddKnownKey(EthconnectConfigTopic)
-	ethconnectConf.AddKnownKey(EthconnectConfigBatchSize, defaultBatchSize)
-	ethconnectConf.AddKnownKey(EthconnectConfigBatchTimeout, defaultBatchTimeout)
-	ethconnectConf.AddKnownKey(EthconnectPrefixShort, defaultPrefixShort)
-	ethconnectConf.AddKnownKey(EthconnectPrefixLong, defaultPrefixLong)
-	ethconnectConf.AddKnownKey(EthconnectConfigFromBlock, defaultFromBlock)
+func (e *Ethereum) InitConfig(config config.Section) {
+	e.ethconnectConf = config.SubSection(EthconnectConfigKey)
+	wsclient.InitConfig(e.ethconnectConf)
+	e.ethconnectConf.AddKnownKey(EthconnectConfigTopic)
+	e.ethconnectConf.AddKnownKey(EthconnectConfigBatchSize, defaultBatchSize)
+	e.ethconnectConf.AddKnownKey(EthconnectConfigBatchTimeout, defaultBatchTimeout)
+	e.ethconnectConf.AddKnownKey(EthconnectPrefixShort, defaultPrefixShort)
+	e.ethconnectConf.AddKnownKey(EthconnectPrefixLong, defaultPrefixLong)
+	e.ethconnectConf.AddKnownKey(EthconnectConfigInstanceDeprecated)
+	e.ethconnectConf.AddKnownKey(EthconnectConfigFromBlockDeprecated, defaultFromBlock)
 
-	fftmConf := prefix.SubPrefix(FFTMConfigKey)
-	ffresty.InitPrefix(fftmConf)
+	fftmConf := config.SubSection(FFTMConfigKey)
+	ffresty.InitConfig(fftmConf)
 
-	addressResolverConf := prefix.SubPrefix(AddressResolverConfigKey)
-	ffresty.InitPrefix(addressResolverConf)
+	addressResolverConf := config.SubSection(AddressResolverConfigKey)
+	ffresty.InitConfig(addressResolverConf)
 	addressResolverConf.AddKnownKey(AddressResolverRetainOriginal)
 	addressResolverConf.AddKnownKey(AddressResolverMethod, defaultAddressResolverMethod)
 	addressResolverConf.AddKnownKey(AddressResolverURLTemplate)

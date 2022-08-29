@@ -17,11 +17,15 @@
 package ffdx
 
 import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/dataexchange"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 type wsEvent struct {
@@ -45,10 +49,9 @@ type dxEvent struct {
 	dxType              dataexchange.DXEventType
 	messageReceived     *dataexchange.MessageReceived
 	privateBlobReceived *dataexchange.PrivateBlobReceived
-	transferResult      *dataexchange.TransferResult
 }
 
-func (e *dxEvent) ID() string {
+func (e *dxEvent) EventID() string {
 	return e.id
 }
 
@@ -79,106 +82,123 @@ func (e *dxEvent) PrivateBlobReceived() *dataexchange.PrivateBlobReceived {
 	return e.privateBlobReceived
 }
 
-func (e *dxEvent) TransferResult() *dataexchange.TransferResult {
-	return e.transferResult
-}
-
 func (h *FFDX) dispatchEvent(msg *wsEvent) {
+	var namespace string
 	var err error
 	e := &dxEvent{ffdx: h, id: msg.EventID}
+
 	switch msg.Type {
 	case messageFailed:
-		e.dxType = dataexchange.DXEventTypeTransferResult
-		e.transferResult = &dataexchange.TransferResult{
-			TrackingID: msg.RequestID,
-			Status:     fftypes.OpStatusFailed,
-			TransportStatusUpdate: fftypes.TransportStatusUpdate{
-				Error: msg.Error,
-				Info:  msg.Info,
-			},
-		}
+		h.callbacks.OperationUpdate(h.ctx, &core.OperationUpdate{
+			Plugin:         h.Name(),
+			NamespacedOpID: msg.RequestID,
+			Status:         core.OpStatusFailed,
+			ErrorMessage:   msg.Error,
+			Output:         msg.Info,
+			OnComplete:     e.Ack,
+		})
+		return
 	case messageDelivered:
-		status := fftypes.OpStatusSucceeded
+		status := core.OpStatusSucceeded
 		if h.capabilities.Manifest {
-			status = fftypes.OpStatusPending
+			status = core.OpStatusPending
 		}
-		e.dxType = dataexchange.DXEventTypeTransferResult
-		e.transferResult = &dataexchange.TransferResult{
-			TrackingID: msg.RequestID,
-			Status:     status,
-			TransportStatusUpdate: fftypes.TransportStatusUpdate{
-				Info: msg.Info,
-			},
-		}
+		h.callbacks.OperationUpdate(h.ctx, &core.OperationUpdate{
+			Plugin:         h.Name(),
+			NamespacedOpID: msg.RequestID,
+			Status:         status,
+			Output:         msg.Info,
+			OnComplete:     e.Ack,
+		})
+		return
 	case messageAcknowledged:
-		e.dxType = dataexchange.DXEventTypeTransferResult
-		e.transferResult = &dataexchange.TransferResult{
-			TrackingID: msg.RequestID,
-			Status:     fftypes.OpStatusSucceeded,
-			TransportStatusUpdate: fftypes.TransportStatusUpdate{
-				Manifest: msg.Manifest,
-				Info:     msg.Info,
-			},
-		}
-	case messageReceived:
-		e.dxType = dataexchange.DXEventTypeMessageReceived
-		e.messageReceived = &dataexchange.MessageReceived{
-			PeerID: msg.Sender,
-			Data:   []byte(msg.Message),
-		}
+		h.callbacks.OperationUpdate(h.ctx, &core.OperationUpdate{
+			Plugin:         h.Name(),
+			NamespacedOpID: msg.RequestID,
+			Status:         core.OpStatusSucceeded,
+			VerifyManifest: h.capabilities.Manifest,
+			DXManifest:     msg.Manifest,
+			Output:         msg.Info,
+			OnComplete:     e.Ack,
+		})
+		return
 	case blobFailed:
-		e.dxType = dataexchange.DXEventTypeTransferResult
-		e.transferResult = &dataexchange.TransferResult{
-			TrackingID: msg.RequestID,
-			Status:     fftypes.OpStatusFailed,
-			TransportStatusUpdate: fftypes.TransportStatusUpdate{
-				Error: msg.Error,
-				Info:  msg.Info,
-			},
-		}
+		h.callbacks.OperationUpdate(h.ctx, &core.OperationUpdate{
+			Plugin:         h.Name(),
+			NamespacedOpID: msg.RequestID,
+			Status:         core.OpStatusFailed,
+			ErrorMessage:   msg.Error,
+			Output:         msg.Info,
+			OnComplete:     e.Ack,
+		})
+		return
 	case blobDelivered:
-		status := fftypes.OpStatusSucceeded
+		status := core.OpStatusSucceeded
 		if h.capabilities.Manifest {
-			status = fftypes.OpStatusPending
+			status = core.OpStatusPending
 		}
-		e.dxType = dataexchange.DXEventTypeTransferResult
-		e.transferResult = &dataexchange.TransferResult{
-			TrackingID: msg.RequestID,
-			Status:     status,
-			TransportStatusUpdate: fftypes.TransportStatusUpdate{
-				Info: msg.Info,
-			},
+		h.callbacks.OperationUpdate(h.ctx, &core.OperationUpdate{
+			Plugin:         h.Name(),
+			NamespacedOpID: msg.RequestID,
+			Status:         status,
+			Output:         msg.Info,
+			OnComplete:     e.Ack,
+		})
+		return
+	case blobAcknowledged:
+		h.callbacks.OperationUpdate(h.ctx, &core.OperationUpdate{
+			Plugin:         h.Name(),
+			NamespacedOpID: msg.RequestID,
+			Status:         core.OpStatusSucceeded,
+			Output:         msg.Info,
+			VerifyManifest: h.capabilities.Manifest,
+			DXHash:         msg.Hash,
+			OnComplete:     e.Ack,
+		})
+		return
+
+	case messageReceived:
+		// De-serialize the transport wrapper
+		var wrapper *core.TransportWrapper
+		err = json.Unmarshal([]byte(msg.Message), &wrapper)
+		switch {
+		case err != nil:
+			err = fmt.Errorf("invalid transmission from peer '%s': %s", msg.Sender, err)
+		case wrapper.Batch == nil:
+			err = fmt.Errorf("invalid transmission from peer '%s': nil batch", msg.Sender)
+		default:
+			namespace = wrapper.Batch.Namespace
+			e.dxType = dataexchange.DXEventTypeMessageReceived
+			e.messageReceived = &dataexchange.MessageReceived{
+				PeerID:    msg.Sender,
+				Transport: wrapper,
+			}
 		}
+
 	case blobReceived:
 		var hash *fftypes.Bytes32
 		hash, err = fftypes.ParseBytes32(h.ctx, msg.Hash)
 		if err == nil {
+			_, namespace, _ = splitBlobPath(msg.Path)
 			e.dxType = dataexchange.DXEventTypePrivateBlobReceived
 			e.privateBlobReceived = &dataexchange.PrivateBlobReceived{
+				Namespace:  namespace,
 				PeerID:     msg.Sender,
 				Hash:       *hash,
 				Size:       msg.Size,
 				PayloadRef: msg.Path,
 			}
 		}
-	case blobAcknowledged:
-		e.dxType = dataexchange.DXEventTypeTransferResult
-		e.transferResult = &dataexchange.TransferResult{
-			TrackingID: msg.RequestID,
-			Status:     fftypes.OpStatusSucceeded,
-			TransportStatusUpdate: fftypes.TransportStatusUpdate{
-				Hash: msg.Hash,
-				Info: msg.Info,
-			},
-		}
+
 	default:
 		err = i18n.NewError(h.ctx, coremsgs.MsgUnexpectedDXMessageType, msg.Type)
 	}
+
 	// If we couldn't dispatch the event we received, we still ack it
 	if err != nil {
 		log.L(h.ctx).Warnf("Failed to dispatch DX event: %s", err)
 		e.Ack()
 	} else {
-		h.callbacks.DXEvent(e)
+		h.callbacks.DXEvent(h.ctx, namespace, msg.Recipient, e)
 	}
 }

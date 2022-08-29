@@ -21,55 +21,53 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hyperledger/firefly/internal/broadcast"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
 	"github.com/hyperledger/firefly/internal/coremsgs"
 	"github.com/hyperledger/firefly/internal/identity"
 	"github.com/hyperledger/firefly/internal/operations"
 	"github.com/hyperledger/firefly/internal/syncasync"
 	"github.com/hyperledger/firefly/internal/txcommon"
 	"github.com/hyperledger/firefly/pkg/blockchain"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
 	"github.com/santhosh-tekuri/jsonschema/v5"
 )
 
 type Manager interface {
-	fftypes.Named
+	core.Named
 
-	BroadcastFFI(ctx context.Context, ns string, ffi *fftypes.FFI, waitConfirm bool) (output *fftypes.FFI, err error)
-	GetFFI(ctx context.Context, ns, name, version string) (*fftypes.FFI, error)
-	GetFFIWithChildren(ctx context.Context, ns, name, version string) (*fftypes.FFI, error)
+	GetFFI(ctx context.Context, name, version string) (*fftypes.FFI, error)
+	GetFFIWithChildren(ctx context.Context, name, version string) (*fftypes.FFI, error)
 	GetFFIByID(ctx context.Context, id *fftypes.UUID) (*fftypes.FFI, error)
 	GetFFIByIDWithChildren(ctx context.Context, id *fftypes.UUID) (*fftypes.FFI, error)
-	GetFFIs(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.FFI, *database.FilterResult, error)
+	GetFFIs(ctx context.Context, filter database.AndFilter) ([]*fftypes.FFI, *database.FilterResult, error)
+	ResolveFFI(ctx context.Context, ffi *fftypes.FFI) error
 
-	InvokeContract(ctx context.Context, ns string, req *fftypes.ContractCallRequest, waitConfirm bool) (interface{}, error)
-	InvokeContractAPI(ctx context.Context, ns, apiName, methodPath string, req *fftypes.ContractCallRequest, waitConfirm bool) (interface{}, error)
-	GetContractAPI(ctx context.Context, httpServerURL, ns, apiName string) (*fftypes.ContractAPI, error)
-	GetContractAPIInterface(ctx context.Context, ns, apiName string) (*fftypes.FFI, error)
-	GetContractAPIs(ctx context.Context, httpServerURL, ns string, filter database.AndFilter) ([]*fftypes.ContractAPI, *database.FilterResult, error)
-	BroadcastContractAPI(ctx context.Context, httpServerURL, ns string, api *fftypes.ContractAPI, waitConfirm bool) (output *fftypes.ContractAPI, err error)
+	InvokeContract(ctx context.Context, req *core.ContractCallRequest, waitConfirm bool) (interface{}, error)
+	InvokeContractAPI(ctx context.Context, apiName, methodPath string, req *core.ContractCallRequest, waitConfirm bool) (interface{}, error)
+	GetContractAPI(ctx context.Context, httpServerURL, apiName string) (*core.ContractAPI, error)
+	GetContractAPIInterface(ctx context.Context, apiName string) (*fftypes.FFI, error)
+	GetContractAPIs(ctx context.Context, httpServerURL string, filter database.AndFilter) ([]*core.ContractAPI, *database.FilterResult, error)
+	ResolveContractAPI(ctx context.Context, httpServerURL string, api *core.ContractAPI) error
 
-	ValidateFFIAndSetPathnames(ctx context.Context, ffi *fftypes.FFI) error
-
-	AddContractListener(ctx context.Context, ns string, listener *fftypes.ContractListenerInput) (output *fftypes.ContractListener, err error)
-	AddContractAPIListener(ctx context.Context, ns, apiName, eventPath string, listener *fftypes.ContractListener) (output *fftypes.ContractListener, err error)
-	GetContractListenerByNameOrID(ctx context.Context, ns, nameOrID string) (*fftypes.ContractListener, error)
-	GetContractListeners(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.ContractListener, *database.FilterResult, error)
-	GetContractAPIListeners(ctx context.Context, ns string, apiName, eventPath string, filter database.AndFilter) ([]*fftypes.ContractListener, *database.FilterResult, error)
-	DeleteContractListenerByNameOrID(ctx context.Context, ns, nameOrID string) error
-	GenerateFFI(ctx context.Context, ns string, generationRequest *fftypes.FFIGenerationRequest) (*fftypes.FFI, error)
+	AddContractListener(ctx context.Context, listener *core.ContractListenerInput) (output *core.ContractListener, err error)
+	AddContractAPIListener(ctx context.Context, apiName, eventPath string, listener *core.ContractListener) (output *core.ContractListener, err error)
+	GetContractListenerByNameOrID(ctx context.Context, nameOrID string) (*core.ContractListener, error)
+	GetContractListeners(ctx context.Context, filter database.AndFilter) ([]*core.ContractListener, *database.FilterResult, error)
+	GetContractAPIListeners(ctx context.Context, apiName, eventPath string, filter database.AndFilter) ([]*core.ContractListener, *database.FilterResult, error)
+	DeleteContractListenerByNameOrID(ctx context.Context, nameOrID string) error
+	GenerateFFI(ctx context.Context, generationRequest *fftypes.FFIGenerationRequest) (*fftypes.FFI, error)
 
 	// From operations.OperationHandler
-	PrepareOperation(ctx context.Context, op *fftypes.Operation) (*fftypes.PreparedOperation, error)
-	RunOperation(ctx context.Context, op *fftypes.PreparedOperation) (outputs fftypes.JSONObject, complete bool, err error)
+	PrepareOperation(ctx context.Context, op *core.Operation) (*core.PreparedOperation, error)
+	RunOperation(ctx context.Context, op *core.PreparedOperation) (outputs fftypes.JSONObject, complete bool, err error)
 }
 
 type contractManager struct {
+	namespace         string
 	database          database.Plugin
 	txHelper          txcommon.Helper
-	broadcast         broadcast.Manager
 	identity          identity.Manager
 	blockchain        blockchain.Plugin
 	ffiParamValidator fftypes.FFIParamValidator
@@ -77,9 +75,9 @@ type contractManager struct {
 	syncasync         syncasync.Bridge
 }
 
-func NewContractManager(ctx context.Context, di database.Plugin, bm broadcast.Manager, im identity.Manager, bi blockchain.Plugin, om operations.Manager, txHelper txcommon.Helper, sa syncasync.Bridge) (Manager, error) {
-	if di == nil || bm == nil || im == nil || bi == nil || om == nil || txHelper == nil || sa == nil {
-		return nil, i18n.NewError(ctx, coremsgs.MsgInitializationNilDepError)
+func NewContractManager(ctx context.Context, ns string, di database.Plugin, bi blockchain.Plugin, im identity.Manager, om operations.Manager, txHelper txcommon.Helper, sa syncasync.Bridge) (Manager, error) {
+	if di == nil || im == nil || bi == nil || om == nil || txHelper == nil || sa == nil {
+		return nil, i18n.NewError(ctx, coremsgs.MsgInitializationNilDepError, "ContractManager")
 	}
 	v, err := bi.GetFFIParamValidator(ctx)
 	if err != nil {
@@ -87,9 +85,9 @@ func NewContractManager(ctx context.Context, di database.Plugin, bm broadcast.Ma
 	}
 
 	cm := &contractManager{
+		namespace:         ns,
 		database:          di,
 		txHelper:          txHelper,
-		broadcast:         bm,
 		identity:          im,
 		blockchain:        bi,
 		ffiParamValidator: v,
@@ -97,8 +95,8 @@ func NewContractManager(ctx context.Context, di database.Plugin, bm broadcast.Ma
 		syncasync:         sa,
 	}
 
-	om.RegisterHandler(ctx, cm, []fftypes.OpType{
-		fftypes.OpTypeBlockchainInvoke,
+	om.RegisterHandler(ctx, cm, []core.OpType{
+		core.OpTypeBlockchainInvoke,
 	})
 
 	return cm, nil
@@ -116,44 +114,12 @@ func (cm *contractManager) newFFISchemaCompiler() *jsonschema.Compiler {
 	return c
 }
 
-func (cm *contractManager) BroadcastFFI(ctx context.Context, ns string, ffi *fftypes.FFI, waitConfirm bool) (output *fftypes.FFI, err error) {
-	ffi.ID = fftypes.NewUUID()
-	ffi.Namespace = ns
-
-	existing, err := cm.database.GetFFI(ctx, ffi.Namespace, ffi.Name, ffi.Version)
-	if existing != nil && err == nil {
-		return nil, i18n.NewError(ctx, coremsgs.MsgContractInterfaceExists, ffi.Namespace, ffi.Name, ffi.Version)
-	}
-
-	for _, method := range ffi.Methods {
-		method.ID = fftypes.NewUUID()
-	}
-	for _, event := range ffi.Events {
-		event.ID = fftypes.NewUUID()
-	}
-	if err := cm.ValidateFFIAndSetPathnames(ctx, ffi); err != nil {
-		return nil, err
-	}
-
-	output = ffi
-	msg, err := cm.broadcast.BroadcastDefinitionAsNode(ctx, ns, ffi, fftypes.SystemTagDefineFFI, waitConfirm)
-	if err != nil {
-		return nil, err
-	}
-	output.Message = msg.Header.ID
-	return ffi, nil
+func (cm *contractManager) GetFFI(ctx context.Context, name, version string) (*fftypes.FFI, error) {
+	return cm.database.GetFFI(ctx, cm.namespace, name, version)
 }
 
-func (cm *contractManager) scopeNS(ns string, filter database.AndFilter) database.AndFilter {
-	return filter.Condition(filter.Builder().Eq("namespace", ns))
-}
-
-func (cm *contractManager) GetFFI(ctx context.Context, ns, name, version string) (*fftypes.FFI, error) {
-	return cm.database.GetFFI(ctx, ns, name, version)
-}
-
-func (cm *contractManager) GetFFIWithChildren(ctx context.Context, ns, name, version string) (*fftypes.FFI, error) {
-	ffi, err := cm.GetFFI(ctx, ns, name, version)
+func (cm *contractManager) GetFFIWithChildren(ctx context.Context, name, version string) (*fftypes.FFI, error) {
+	ffi, err := cm.GetFFI(ctx, name, version)
 	if err == nil {
 		err = cm.getFFIChildren(ctx, ffi)
 	}
@@ -161,18 +127,18 @@ func (cm *contractManager) GetFFIWithChildren(ctx context.Context, ns, name, ver
 }
 
 func (cm *contractManager) GetFFIByID(ctx context.Context, id *fftypes.UUID) (*fftypes.FFI, error) {
-	return cm.database.GetFFIByID(ctx, id)
+	return cm.database.GetFFIByID(ctx, cm.namespace, id)
 }
 
 func (cm *contractManager) getFFIChildren(ctx context.Context, ffi *fftypes.FFI) (err error) {
 	mfb := database.FFIMethodQueryFactory.NewFilter(ctx)
-	ffi.Methods, _, err = cm.database.GetFFIMethods(ctx, mfb.Eq("interface", ffi.ID))
+	ffi.Methods, _, err = cm.database.GetFFIMethods(ctx, cm.namespace, mfb.Eq("interface", ffi.ID))
 	if err != nil {
 		return err
 	}
 
 	efb := database.FFIEventQueryFactory.NewFilter(ctx)
-	ffi.Events, _, err = cm.database.GetFFIEvents(ctx, efb.Eq("interface", ffi.ID))
+	ffi.Events, _, err = cm.database.GetFFIEvents(ctx, cm.namespace, efb.Eq("interface", ffi.ID))
 	if err != nil {
 		return err
 	}
@@ -185,7 +151,7 @@ func (cm *contractManager) getFFIChildren(ctx context.Context, ffi *fftypes.FFI)
 
 func (cm *contractManager) GetFFIByIDWithChildren(ctx context.Context, id *fftypes.UUID) (ffi *fftypes.FFI, err error) {
 	err = cm.database.RunAsGroup(ctx, func(ctx context.Context) (err error) {
-		ffi, err = cm.database.GetFFIByID(ctx, id)
+		ffi, err = cm.database.GetFFIByID(ctx, cm.namespace, id)
 		if err != nil || ffi == nil {
 			return err
 		}
@@ -194,44 +160,43 @@ func (cm *contractManager) GetFFIByIDWithChildren(ctx context.Context, id *fftyp
 	return ffi, err
 }
 
-func (cm *contractManager) GetFFIs(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.FFI, *database.FilterResult, error) {
-	filter = cm.scopeNS(ns, filter)
-	return cm.database.GetFFIs(ctx, ns, filter)
+func (cm *contractManager) GetFFIs(ctx context.Context, filter database.AndFilter) ([]*fftypes.FFI, *database.FilterResult, error) {
+	return cm.database.GetFFIs(ctx, cm.namespace, filter)
 }
 
-func (cm *contractManager) writeInvokeTransaction(ctx context.Context, ns string, req *fftypes.ContractCallRequest) (*fftypes.Operation, error) {
-	txid, err := cm.txHelper.SubmitNewTransaction(ctx, ns, fftypes.TransactionTypeContractInvoke)
+func (cm *contractManager) writeInvokeTransaction(ctx context.Context, req *core.ContractCallRequest) (*core.Operation, error) {
+	txid, err := cm.txHelper.SubmitNewTransaction(ctx, core.TransactionTypeContractInvoke)
 	if err != nil {
 		return nil, err
 	}
 
-	op := fftypes.NewOperation(
+	op := core.NewOperation(
 		cm.blockchain,
-		ns,
+		cm.namespace,
 		txid,
-		fftypes.OpTypeBlockchainInvoke)
+		core.OpTypeBlockchainInvoke)
 	if err = addBlockchainInvokeInputs(op, req); err == nil {
 		err = cm.database.InsertOperation(ctx, op)
 	}
 	return op, err
 }
 
-func (cm *contractManager) InvokeContract(ctx context.Context, ns string, req *fftypes.ContractCallRequest, waitConfirm bool) (res interface{}, err error) {
+func (cm *contractManager) InvokeContract(ctx context.Context, req *core.ContractCallRequest, waitConfirm bool) (res interface{}, err error) {
 	req.Key, err = cm.identity.NormalizeSigningKey(ctx, req.Key, identity.KeyNormalizationBlockchainPlugin)
 	if err != nil {
 		return nil, err
 	}
 
-	var op *fftypes.Operation
+	var op *core.Operation
 	err = cm.database.RunAsGroup(ctx, func(ctx context.Context) (err error) {
-		if err = cm.resolveInvokeContractRequest(ctx, ns, req); err != nil {
+		if err = cm.resolveInvokeContractRequest(ctx, req); err != nil {
 			return err
 		}
 		if err := cm.validateInvokeContractRequest(ctx, req); err != nil {
 			return err
 		}
-		if req.Type == fftypes.CallTypeInvoke {
-			op, err = cm.writeInvokeTransaction(ctx, ns, req)
+		if req.Type == core.CallTypeInvoke {
+			op, err = cm.writeInvokeTransaction(ctx, req)
 			if err != nil {
 				return err
 			}
@@ -243,25 +208,25 @@ func (cm *contractManager) InvokeContract(ctx context.Context, ns string, req *f
 	}
 
 	switch req.Type {
-	case fftypes.CallTypeInvoke:
+	case core.CallTypeInvoke:
 		send := func(ctx context.Context) error {
 			_, err := cm.operations.RunOperation(ctx, opBlockchainInvoke(op, req))
 			return err
 		}
 		if waitConfirm {
-			return cm.syncasync.WaitForInvokeOperation(ctx, ns, op.ID, send)
+			return cm.syncasync.WaitForInvokeOperation(ctx, op.ID, send)
 		}
 		err = send(ctx)
 		return op, err
-	case fftypes.CallTypeQuery:
-		return cm.blockchain.QueryContract(ctx, req.Location, req.Method, req.Input)
+	case core.CallTypeQuery:
+		return cm.blockchain.QueryContract(ctx, req.Location, req.Method, req.Input, req.Options)
 	default:
 		panic(fmt.Sprintf("unknown call type: %s", req.Type))
 	}
 }
 
-func (cm *contractManager) InvokeContractAPI(ctx context.Context, ns, apiName, methodPath string, req *fftypes.ContractCallRequest, waitConfirm bool) (interface{}, error) {
-	api, err := cm.database.GetContractAPIByName(ctx, ns, apiName)
+func (cm *contractManager) InvokeContractAPI(ctx context.Context, apiName, methodPath string, req *core.ContractCallRequest, waitConfirm bool) (interface{}, error) {
+	api, err := cm.database.GetContractAPIByName(ctx, cm.namespace, apiName)
 	if err != nil {
 		return nil, err
 	} else if api == nil || api.Interface == nil {
@@ -272,15 +237,15 @@ func (cm *contractManager) InvokeContractAPI(ctx context.Context, ns, apiName, m
 	if api.Location != nil {
 		req.Location = api.Location
 	}
-	return cm.InvokeContract(ctx, ns, req, waitConfirm)
+	return cm.InvokeContract(ctx, req, waitConfirm)
 }
 
-func (cm *contractManager) resolveInvokeContractRequest(ctx context.Context, ns string, req *fftypes.ContractCallRequest) (err error) {
+func (cm *contractManager) resolveInvokeContractRequest(ctx context.Context, req *core.ContractCallRequest) (err error) {
 	if req.Method == nil {
 		if req.MethodPath == "" || req.Interface == nil {
 			return i18n.NewError(ctx, coremsgs.MsgContractMethodNotSet)
 		}
-		req.Method, err = cm.database.GetFFIMethod(ctx, ns, req.Interface, req.MethodPath)
+		req.Method, err = cm.database.GetFFIMethod(ctx, cm.namespace, req.Interface, req.MethodPath)
 		if err != nil || req.Method == nil {
 			return i18n.NewError(ctx, coremsgs.MsgContractMethodResolveError, err)
 		}
@@ -288,7 +253,7 @@ func (cm *contractManager) resolveInvokeContractRequest(ctx context.Context, ns 
 	return nil
 }
 
-func (cm *contractManager) addContractURLs(httpServerURL string, api *fftypes.ContractAPI) {
+func (cm *contractManager) addContractURLs(httpServerURL string, api *core.ContractAPI) {
 	if api != nil {
 		// These URLs must match the actual routes in apiserver.createMuxRouter()!
 		baseURL := fmt.Sprintf("%s/namespaces/%s/apis/%s", httpServerURL, api.Namespace, api.Name)
@@ -297,65 +262,32 @@ func (cm *contractManager) addContractURLs(httpServerURL string, api *fftypes.Co
 	}
 }
 
-func (cm *contractManager) GetContractAPI(ctx context.Context, httpServerURL, ns, apiName string) (*fftypes.ContractAPI, error) {
-	api, err := cm.database.GetContractAPIByName(ctx, ns, apiName)
+func (cm *contractManager) GetContractAPI(ctx context.Context, httpServerURL, apiName string) (*core.ContractAPI, error) {
+	api, err := cm.database.GetContractAPIByName(ctx, cm.namespace, apiName)
 	cm.addContractURLs(httpServerURL, api)
 	return api, err
 }
 
-func (cm *contractManager) GetContractAPIInterface(ctx context.Context, ns, apiName string) (*fftypes.FFI, error) {
-	api, err := cm.GetContractAPI(ctx, "", ns, apiName)
+func (cm *contractManager) GetContractAPIInterface(ctx context.Context, apiName string) (*fftypes.FFI, error) {
+	api, err := cm.GetContractAPI(ctx, "", apiName)
 	if err != nil || api == nil {
 		return nil, err
 	}
 	return cm.GetFFIByIDWithChildren(ctx, api.Interface.ID)
 }
 
-func (cm *contractManager) GetContractAPIs(ctx context.Context, httpServerURL, ns string, filter database.AndFilter) ([]*fftypes.ContractAPI, *database.FilterResult, error) {
-	filter = cm.scopeNS(ns, filter)
-	apis, fr, err := cm.database.GetContractAPIs(ctx, ns, filter)
+func (cm *contractManager) GetContractAPIs(ctx context.Context, httpServerURL string, filter database.AndFilter) ([]*core.ContractAPI, *database.FilterResult, error) {
+	apis, fr, err := cm.database.GetContractAPIs(ctx, cm.namespace, filter)
 	for _, api := range apis {
 		cm.addContractURLs(httpServerURL, api)
 	}
 	return apis, fr, err
 }
 
-func (cm *contractManager) resolveFFIReference(ctx context.Context, ns string, ref *fftypes.FFIReference) error {
-	switch {
-	case ref == nil:
-		return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, "")
-
-	case ref.ID != nil:
-		ffi, err := cm.database.GetFFIByID(ctx, ref.ID)
-		if err != nil {
-			return err
-		} else if ffi == nil {
-			return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, ref.ID)
-		}
-		return nil
-
-	case ref.Name != "" && ref.Version != "":
-		ffi, err := cm.database.GetFFI(ctx, ns, ref.Name, ref.Version)
-		if err != nil {
-			return err
-		} else if ffi == nil {
-			return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, ref.Name)
-		}
-		ref.ID = ffi.ID
-		return nil
-
-	default:
-		return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, ref.Name)
-	}
-}
-
-func (cm *contractManager) BroadcastContractAPI(ctx context.Context, httpServerURL, ns string, api *fftypes.ContractAPI, waitConfirm bool) (output *fftypes.ContractAPI, err error) {
-	api.ID = fftypes.NewUUID()
-	api.Namespace = ns
-
+func (cm *contractManager) ResolveContractAPI(ctx context.Context, httpServerURL string, api *core.ContractAPI) (err error) {
 	if api.Location != nil {
 		if api.Location, err = cm.blockchain.NormalizeContractLocation(ctx, api.Location); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
@@ -367,22 +299,48 @@ func (cm *contractManager) BroadcastContractAPI(ctx context.Context, httpServerU
 			}
 		}
 
-		if err := cm.resolveFFIReference(ctx, ns, api.Interface); err != nil {
+		if err := cm.resolveFFIReference(ctx, api.Interface); err != nil {
 			return err
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	msg, err := cm.broadcast.BroadcastDefinitionAsNode(ctx, ns, api, fftypes.SystemTagDefineContractAPI, waitConfirm)
-	if err != nil {
-		return nil, err
+	if httpServerURL != "" {
+		cm.addContractURLs(httpServerURL, api)
 	}
-	api.Message = msg.Header.ID
-	cm.addContractURLs(httpServerURL, api)
-	return api, nil
+	return nil
+}
+
+func (cm *contractManager) resolveFFIReference(ctx context.Context, ref *fftypes.FFIReference) error {
+	switch {
+	case ref == nil:
+		return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, "")
+
+	case ref.ID != nil:
+		ffi, err := cm.database.GetFFIByID(ctx, cm.namespace, ref.ID)
+		if err != nil {
+			return err
+		} else if ffi == nil {
+			return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, ref.ID)
+		}
+		return nil
+
+	case ref.Name != "" && ref.Version != "":
+		ffi, err := cm.database.GetFFI(ctx, cm.namespace, ref.Name, ref.Version)
+		if err != nil {
+			return err
+		} else if ffi == nil {
+			return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, ref.Name)
+		}
+		ref.ID = ffi.ID
+		return nil
+
+	default:
+		return i18n.NewError(ctx, coremsgs.MsgContractInterfaceNotFound, ref.Name)
+	}
 }
 
 func (cm *contractManager) uniquePathName(name string, usedNames map[string]bool) string {
@@ -397,9 +355,14 @@ func (cm *contractManager) uniquePathName(name string, usedNames map[string]bool
 	}
 }
 
-func (cm *contractManager) ValidateFFIAndSetPathnames(ctx context.Context, ffi *fftypes.FFI) error {
+func (cm *contractManager) ResolveFFI(ctx context.Context, ffi *fftypes.FFI) error {
 	if err := ffi.Validate(ctx, false); err != nil {
 		return err
+	}
+
+	existing, err := cm.database.GetFFI(ctx, cm.namespace, ffi.Name, ffi.Version)
+	if existing != nil && err == nil {
+		return i18n.NewError(ctx, coremsgs.MsgContractInterfaceExists, ffi.Namespace, ffi.Name, ffi.Version)
 	}
 
 	methodPathNames := map[string]bool{}
@@ -464,7 +427,7 @@ func (cm *contractManager) validateFFIEvent(ctx context.Context, event *fftypes.
 	return nil
 }
 
-func (cm *contractManager) validateInvokeContractRequest(ctx context.Context, req *fftypes.ContractCallRequest) error {
+func (cm *contractManager) validateInvokeContractRequest(ctx context.Context, req *core.ContractCallRequest) error {
 	if err := cm.validateFFIMethod(ctx, req.Method); err != nil {
 		return err
 	}
@@ -482,26 +445,23 @@ func (cm *contractManager) validateInvokeContractRequest(ctx context.Context, re
 	return nil
 }
 
-func (cm *contractManager) resolveEvent(ctx context.Context, ns string, ffi *fftypes.FFIReference, eventPath string) (*fftypes.FFISerializedEvent, error) {
-	if err := cm.resolveFFIReference(ctx, ns, ffi); err != nil {
+func (cm *contractManager) resolveEvent(ctx context.Context, ffi *fftypes.FFIReference, eventPath string) (*core.FFISerializedEvent, error) {
+	if err := cm.resolveFFIReference(ctx, ffi); err != nil {
 		return nil, err
 	}
-	event, err := cm.database.GetFFIEvent(ctx, ns, ffi.ID, eventPath)
+	event, err := cm.database.GetFFIEvent(ctx, cm.namespace, ffi.ID, eventPath)
 	if err != nil {
 		return nil, err
 	} else if event == nil {
 		return nil, i18n.NewError(ctx, coremsgs.MsgEventNotFound, eventPath)
 	}
-	return &fftypes.FFISerializedEvent{FFIEventDefinition: event.FFIEventDefinition}, nil
+	return &core.FFISerializedEvent{FFIEventDefinition: event.FFIEventDefinition}, nil
 }
 
-func (cm *contractManager) AddContractListener(ctx context.Context, ns string, listener *fftypes.ContractListenerInput) (output *fftypes.ContractListener, err error) {
+func (cm *contractManager) AddContractListener(ctx context.Context, listener *core.ContractListenerInput) (output *core.ContractListener, err error) {
 	listener.ID = fftypes.NewUUID()
-	listener.Namespace = ns
+	listener.Namespace = cm.namespace
 
-	if err := fftypes.ValidateFFNameField(ctx, ns, "namespace"); err != nil {
-		return nil, err
-	}
 	if listener.Name != "" {
 		if err := fftypes.ValidateFFNameField(ctx, listener.Name, "name"); err != nil {
 			return nil, err
@@ -523,10 +483,10 @@ func (cm *contractManager) AddContractListener(ctx context.Context, ns string, l
 	err = cm.database.RunAsGroup(ctx, func(ctx context.Context) (err error) {
 		// Namespace + Name must be unique
 		if listener.Name != "" {
-			if existing, err := cm.database.GetContractListener(ctx, ns, listener.Name); err != nil {
+			if existing, err := cm.database.GetContractListener(ctx, cm.namespace, listener.Name); err != nil {
 				return err
 			} else if existing != nil {
-				return i18n.NewError(ctx, coremsgs.MsgContractListenerNameExists, ns, listener.Name)
+				return i18n.NewError(ctx, coremsgs.MsgContractListenerNameExists, cm.namespace, listener.Name)
 			}
 		}
 
@@ -535,7 +495,7 @@ func (cm *contractManager) AddContractListener(ctx context.Context, ns string, l
 				return i18n.NewError(ctx, coremsgs.MsgListenerNoEvent)
 			}
 			// Copy the event definition into the listener
-			if listener.Event, err = cm.resolveEvent(ctx, ns, listener.Interface, listener.EventPath); err != nil {
+			if listener.Event, err = cm.resolveEvent(ctx, listener.Interface, listener.EventPath); err != nil {
 				return err
 			}
 		} else {
@@ -545,8 +505,7 @@ func (cm *contractManager) AddContractListener(ctx context.Context, ns string, l
 		// Namespace + Topic + Location + Signature must be unique
 		listener.Signature = cm.blockchain.GenerateEventSignature(ctx, &listener.Event.FFIEventDefinition)
 		fb := database.ContractListenerQueryFactory.NewFilter(ctx)
-		if existing, _, err := cm.database.GetContractListeners(ctx, fb.And(
-			fb.Eq("namespace", listener.Namespace),
+		if existing, _, err := cm.database.GetContractListeners(ctx, cm.namespace, fb.And(
 			fb.Eq("topic", listener.Topic),
 			fb.Eq("location", listener.Location.Bytes()),
 			fb.Eq("signature", listener.Signature),
@@ -570,41 +529,41 @@ func (cm *contractManager) AddContractListener(ctx context.Context, ns string, l
 	if listener.Name == "" {
 		listener.Name = listener.BackendID
 	}
-	if err = cm.database.UpsertContractListener(ctx, &listener.ContractListener); err != nil {
+	if err = cm.database.InsertContractListener(ctx, &listener.ContractListener); err != nil {
 		return nil, err
 	}
 
 	return &listener.ContractListener, err
 }
 
-func (cm *contractManager) AddContractAPIListener(ctx context.Context, ns, apiName, eventPath string, listener *fftypes.ContractListener) (output *fftypes.ContractListener, err error) {
-	api, err := cm.database.GetContractAPIByName(ctx, ns, apiName)
+func (cm *contractManager) AddContractAPIListener(ctx context.Context, apiName, eventPath string, listener *core.ContractListener) (output *core.ContractListener, err error) {
+	api, err := cm.database.GetContractAPIByName(ctx, cm.namespace, apiName)
 	if err != nil {
 		return nil, err
 	} else if api == nil || api.Interface == nil {
 		return nil, i18n.NewError(ctx, coremsgs.Msg404NotFound)
 	}
 
-	input := &fftypes.ContractListenerInput{ContractListener: *listener}
+	input := &core.ContractListenerInput{ContractListener: *listener}
 	input.Interface = &fftypes.FFIReference{ID: api.Interface.ID}
 	input.EventPath = eventPath
 	if api.Location != nil {
 		input.Location = api.Location
 	}
 
-	return cm.AddContractListener(ctx, ns, input)
+	return cm.AddContractListener(ctx, input)
 }
 
-func (cm *contractManager) GetContractListenerByNameOrID(ctx context.Context, ns, nameOrID string) (listener *fftypes.ContractListener, err error) {
+func (cm *contractManager) GetContractListenerByNameOrID(ctx context.Context, nameOrID string) (listener *core.ContractListener, err error) {
 	id, err := fftypes.ParseUUID(ctx, nameOrID)
 	if err != nil {
 		if err := fftypes.ValidateFFNameField(ctx, nameOrID, "name"); err != nil {
 			return nil, err
 		}
-		if listener, err = cm.database.GetContractListener(ctx, ns, nameOrID); err != nil {
+		if listener, err = cm.database.GetContractListener(ctx, cm.namespace, nameOrID); err != nil {
 			return nil, err
 		}
-	} else if listener, err = cm.database.GetContractListenerByID(ctx, id); err != nil {
+	} else if listener, err = cm.database.GetContractListenerByID(ctx, cm.namespace, id); err != nil {
 		return nil, err
 	}
 	if listener == nil {
@@ -613,18 +572,18 @@ func (cm *contractManager) GetContractListenerByNameOrID(ctx context.Context, ns
 	return listener, nil
 }
 
-func (cm *contractManager) GetContractListeners(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.ContractListener, *database.FilterResult, error) {
-	return cm.database.GetContractListeners(ctx, cm.scopeNS(ns, filter))
+func (cm *contractManager) GetContractListeners(ctx context.Context, filter database.AndFilter) ([]*core.ContractListener, *database.FilterResult, error) {
+	return cm.database.GetContractListeners(ctx, cm.namespace, filter)
 }
 
-func (cm *contractManager) GetContractAPIListeners(ctx context.Context, ns string, apiName, eventPath string, filter database.AndFilter) ([]*fftypes.ContractListener, *database.FilterResult, error) {
-	api, err := cm.database.GetContractAPIByName(ctx, ns, apiName)
+func (cm *contractManager) GetContractAPIListeners(ctx context.Context, apiName, eventPath string, filter database.AndFilter) ([]*core.ContractListener, *database.FilterResult, error) {
+	api, err := cm.database.GetContractAPIByName(ctx, cm.namespace, apiName)
 	if err != nil {
 		return nil, nil, err
 	} else if api == nil || api.Interface == nil {
 		return nil, nil, i18n.NewError(ctx, coremsgs.Msg404NotFound)
 	}
-	event, err := cm.resolveEvent(ctx, ns, api.Interface, eventPath)
+	event, err := cm.resolveEvent(ctx, api.Interface, eventPath)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -639,19 +598,19 @@ func (cm *contractManager) GetContractAPIListeners(ctx context.Context, ns strin
 	if !api.Location.IsNil() {
 		f = fb.And(f, fb.Eq("location", api.Location.Bytes()))
 	}
-	return cm.database.GetContractListeners(ctx, cm.scopeNS(ns, f))
+	return cm.database.GetContractListeners(ctx, cm.namespace, f)
 }
 
-func (cm *contractManager) DeleteContractListenerByNameOrID(ctx context.Context, ns, nameOrID string) error {
+func (cm *contractManager) DeleteContractListenerByNameOrID(ctx context.Context, nameOrID string) error {
 	return cm.database.RunAsGroup(ctx, func(ctx context.Context) (err error) {
-		listener, err := cm.GetContractListenerByNameOrID(ctx, ns, nameOrID)
+		listener, err := cm.GetContractListenerByNameOrID(ctx, nameOrID)
 		if err != nil {
 			return err
 		}
 		if err = cm.blockchain.DeleteContractListener(ctx, listener); err != nil {
 			return err
 		}
-		return cm.database.DeleteContractListenerByID(ctx, listener.ID)
+		return cm.database.DeleteContractListenerByID(ctx, cm.namespace, listener.ID)
 	})
 }
 
@@ -672,13 +631,13 @@ func (cm *contractManager) checkParamSchema(ctx context.Context, input interface
 	return nil
 }
 
-func (cm *contractManager) GenerateFFI(ctx context.Context, ns string, generationRequest *fftypes.FFIGenerationRequest) (*fftypes.FFI, error) {
-	generationRequest.Namespace = ns
+func (cm *contractManager) GenerateFFI(ctx context.Context, generationRequest *fftypes.FFIGenerationRequest) (*fftypes.FFI, error) {
+	generationRequest.Namespace = cm.namespace
 	return cm.blockchain.GenerateFFI(ctx, generationRequest)
 }
 
-func (cm *contractManager) getDefaultContractListenerOptions() *fftypes.ContractListenerOptions {
-	return &fftypes.ContractListenerOptions{
-		FirstEvent: string(fftypes.SubOptsFirstEventNewest),
+func (cm *contractManager) getDefaultContractListenerOptions() *core.ContractListenerOptions {
+	return &core.ContractListenerOptions{
+		FirstEvent: string(core.SubOptsFirstEventNewest),
 	}
 }

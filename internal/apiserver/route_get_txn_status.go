@@ -19,27 +19,26 @@ package apiserver
 import (
 	"net/http"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var getTxnStatus = &oapispec.Route{
+var getTxnStatus = &ffapi.Route{
 	Name:   "getTxnStatus",
-	Path:   "namespaces/{ns}/transactions/{txnid}/status",
+	Path:   "transactions/{txnid}/status",
 	Method: http.MethodGet,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
+	PathParams: []*ffapi.PathParam{
 		{Name: "txnid", Description: coremsgs.APIParamsTransactionID},
 	},
 	QueryParams:     nil,
-	FilterFactory:   nil,
 	Description:     coremsgs.APIEndpointsGetTxnStatus,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return &fftypes.TransactionStatus{} },
+	JSONOutputValue: func() interface{} { return &core.TransactionStatus{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		return getOr(r.Ctx).GetTransactionStatus(r.Ctx, r.PP["ns"], r.PP["txnid"])
+	Extensions: &coreExtensions{
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			return cr.or.GetTransactionStatus(cr.ctx, r.PP["txnid"])
+		},
 	},
 }

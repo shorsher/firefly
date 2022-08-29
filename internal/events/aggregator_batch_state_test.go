@@ -20,9 +20,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/mocks/databasemocks"
 	"github.com/hyperledger/firefly/mocks/datamocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -33,15 +34,15 @@ func TestFlushPinsFailUpdatePins(t *testing.T) {
 	bs := newBatchState(ag)
 
 	mdi := ag.database.(*databasemocks.Plugin)
-	mdi.On("UpdatePins", ag.ctx, mock.Anything, mock.Anything).Return(fmt.Errorf("pop"))
+	mdi.On("UpdatePins", ag.ctx, "ns1", mock.Anything, mock.Anything).Return(fmt.Errorf("pop"))
 
-	bs.MarkMessageDispatched(ag.ctx, fftypes.NewUUID(), &fftypes.Message{
-		Header: fftypes.MessageHeader{
+	bs.markMessageDispatched(fftypes.NewUUID(), &core.Message{
+		Header: core.MessageHeader{
 			ID:     fftypes.NewUUID(),
-			Topics: fftypes.FFStringArray{"topic1"},
+			Topics: core.FFStringArray{"topic1"},
 		},
-		Pins: fftypes.FFStringArray{"pin1"},
-	}, 0, fftypes.MessageStateConfirmed)
+		Pins: core.FFStringArray{"pin1"},
+	}, 0, core.MessageStateConfirmed)
 
 	err := bs.flushPins(ag.ctx)
 	assert.Regexp(t, "pop", err)
@@ -54,18 +55,18 @@ func TestFlushPinsFailUpdateMessages(t *testing.T) {
 	msgID := fftypes.NewUUID()
 
 	mdi := ag.database.(*databasemocks.Plugin)
-	mdi.On("UpdatePins", ag.ctx, mock.Anything, mock.Anything).Return(nil)
-	mdi.On("UpdateMessages", ag.ctx, mock.Anything, mock.Anything).Return(fmt.Errorf("pop"))
+	mdi.On("UpdatePins", ag.ctx, "ns1", mock.Anything, mock.Anything).Return(nil)
+	mdi.On("UpdateMessages", ag.ctx, "ns1", mock.Anything, mock.Anything).Return(fmt.Errorf("pop"))
 	mdm := ag.data.(*datamocks.Manager)
-	mdm.On("UpdateMessageStateIfCached", ag.ctx, msgID, fftypes.MessageStateConfirmed, mock.Anything).Return()
+	mdm.On("UpdateMessageStateIfCached", ag.ctx, msgID, core.MessageStateConfirmed, mock.Anything).Return()
 
-	bs.MarkMessageDispatched(ag.ctx, fftypes.NewUUID(), &fftypes.Message{
-		Header: fftypes.MessageHeader{
+	bs.markMessageDispatched(fftypes.NewUUID(), &core.Message{
+		Header: core.MessageHeader{
 			ID:     msgID,
-			Topics: fftypes.FFStringArray{"topic1"},
+			Topics: core.FFStringArray{"topic1"},
 		},
-		Pins: fftypes.FFStringArray{"pin1"},
-	}, 0, fftypes.MessageStateConfirmed)
+		Pins: core.FFStringArray{"pin1"},
+	}, 0, core.MessageStateConfirmed)
 
 	err := bs.flushPins(ag.ctx)
 	assert.Regexp(t, "pop", err)
@@ -79,7 +80,7 @@ func TestSetContextBlockedByNoState(t *testing.T) {
 	unmaskedContext := fftypes.NewRandB32()
 	bs.SetContextBlockedBy(ag.ctx, *unmaskedContext, 10)
 
-	ready, err := bs.CheckUnmaskedContextReady(ag.ctx, unmaskedContext, &fftypes.Message{}, "topic1", 1)
+	ready, err := bs.checkUnmaskedContextReady(ag.ctx, unmaskedContext, &core.Message{}, 1)
 	assert.NoError(t, err)
 	assert.False(t, ready)
 }

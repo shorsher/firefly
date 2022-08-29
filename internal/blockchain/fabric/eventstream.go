@@ -18,17 +18,23 @@ package fabric
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/hyperledger/firefly-common/pkg/ffresty"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/pkg/ffresty"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
+	"github.com/karlseguin/ccache"
 )
 
 type streamManager struct {
-	client *resty.Client
-	signer string
+	client   *resty.Client
+	signer   string
+	cache    *ccache.Cache
+	cacheTTL time.Duration
 }
 
 type eventStream struct {
@@ -55,6 +61,15 @@ type subscription struct {
 type eventFilter struct {
 	ChaincodeID string `json:"chaincodeId"`
 	EventFilter string `json:"eventFilter"`
+}
+
+func newStreamManager(client *resty.Client, signer string, cache *ccache.Cache, cacheTTL time.Duration) *streamManager {
+	return &streamManager{
+		client:   client,
+		signer:   signer,
+		cache:    cache,
+		cacheTTL: cacheTTL,
+	}
 }
 
 func (s *streamManager) getEventStreams(ctx context.Context) (streams []*eventStream, err error) {
@@ -113,9 +128,35 @@ func (s *streamManager) getSubscriptions(ctx context.Context) (subs []*subscript
 	return subs, nil
 }
 
+func (s *streamManager) getSubscription(ctx context.Context, subID string) (sub *subscription, err error) {
+	res, err := s.client.R().
+		SetContext(ctx).
+		SetResult(&sub).
+		Get(fmt.Sprintf("/subscriptions/%s", subID))
+	if err != nil || !res.IsSuccess() {
+		return nil, ffresty.WrapRestErr(ctx, res, err, coremsgs.MsgFabconnectRESTErr)
+	}
+	return sub, nil
+}
+
+func (s *streamManager) getSubscriptionName(ctx context.Context, subID string) (string, error) {
+	cached := s.cache.Get("sub:" + subID)
+	if cached != nil {
+		cached.Extend(s.cacheTTL)
+		return cached.Value().(string), nil
+	}
+
+	sub, err := s.getSubscription(ctx, subID)
+	if err != nil {
+		return "", err
+	}
+	s.cache.Set("sub:"+subID, sub.Name, s.cacheTTL)
+	return sub.Name, nil
+}
+
 func (s *streamManager) createSubscription(ctx context.Context, location *Location, stream, name, event, fromBlock string) (*subscription, error) {
 	// Map FireFly "firstEvent" values to Fabric "fromBlock" values
-	if fromBlock == string(fftypes.SubOptsFirstEventOldest) {
+	if fromBlock == string(core.SubOptsFirstEventOldest) {
 		fromBlock = "0"
 	}
 	sub := subscription{
@@ -150,25 +191,38 @@ func (s *streamManager) deleteSubscription(ctx context.Context, subID string) er
 	return nil
 }
 
-func (s *streamManager) ensureSubscription(ctx context.Context, location *Location, stream, event string) (sub *subscription, err error) {
+func (s *streamManager) ensureFireFlySubscription(ctx context.Context, namespace string, version int, location *Location, fromBlock, stream, event string) (sub *subscription, err error) {
 	existingSubs, err := s.getSubscriptions(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	subName := event
+	v1Name := event
+	v2Name := fmt.Sprintf("%s_%s", namespace, event)
+
 	for _, s := range existingSubs {
-		if s.Stream == stream && s.Name == subName {
-			sub = s
+		if s.Stream == stream {
+			if version == 1 {
+				if s.Name == v1Name {
+					return s, nil
+				}
+			} else {
+				if s.Name == v1Name {
+					return nil, i18n.NewError(ctx, coremsgs.MsgInvalidSubscriptionForNetwork, s.Name, version)
+				} else if s.Name == v2Name {
+					return s, nil
+				}
+			}
 		}
 	}
 
-	if sub == nil {
-		if sub, err = s.createSubscription(ctx, location, stream, subName, event, string(fftypes.SubOptsFirstEventOldest)); err != nil {
-			return nil, err
-		}
+	name := v2Name
+	if version == 1 {
+		name = v1Name
 	}
-
+	if sub, err = s.createSubscription(ctx, location, stream, name, event, fromBlock); err != nil {
+		return nil, err
+	}
 	log.L(ctx).Infof("%s subscription: %s", event, sub.ID)
 	return sub, nil
 }

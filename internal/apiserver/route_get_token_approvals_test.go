@@ -21,21 +21,22 @@ import (
 	"testing"
 
 	"github.com/hyperledger/firefly/mocks/assetmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestGetTokenApprovals(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mam := &assetmocks.Manager{}
 	o.On("Assets").Return(mam)
 	req := httptest.NewRequest("GET", "/api/v1/namespaces/ns1/tokens/approvals", nil)
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mam.On("GetTokenApprovals", mock.Anything, "ns1", mock.Anything).
-		Return([]*fftypes.TokenApproval{}, nil, nil)
+	mam.On("GetTokenApprovals", mock.Anything, mock.Anything).
+		Return([]*core.TokenApproval{}, nil, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 200, res.Result().StatusCode)

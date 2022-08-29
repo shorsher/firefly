@@ -19,64 +19,67 @@ package networkmap
 import (
 	"context"
 
-	"github.com/hyperledger/firefly/internal/broadcast"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
 	"github.com/hyperledger/firefly/internal/coremsgs"
+	"github.com/hyperledger/firefly/internal/definitions"
 	"github.com/hyperledger/firefly/internal/identity"
+	"github.com/hyperledger/firefly/internal/multiparty"
 	"github.com/hyperledger/firefly/internal/syncasync"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
 	"github.com/hyperledger/firefly/pkg/dataexchange"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
 )
 
 type Manager interface {
-	RegisterOrganization(ctx context.Context, org *fftypes.IdentityCreateDTO, waitConfirm bool) (identity *fftypes.Identity, err error)
-	RegisterNode(ctx context.Context, waitConfirm bool) (node *fftypes.Identity, err error)
-	RegisterNodeOrganization(ctx context.Context, waitConfirm bool) (org *fftypes.Identity, err error)
-	RegisterIdentity(ctx context.Context, ns string, dto *fftypes.IdentityCreateDTO, waitConfirm bool) (identity *fftypes.Identity, err error)
-	UpdateIdentity(ctx context.Context, ns string, id string, dto *fftypes.IdentityUpdateDTO, waitConfirm bool) (identity *fftypes.Identity, err error)
+	RegisterOrganization(ctx context.Context, org *core.IdentityCreateDTO, waitConfirm bool) (identity *core.Identity, err error)
+	RegisterNode(ctx context.Context, waitConfirm bool) (node *core.Identity, err error)
+	RegisterNodeOrganization(ctx context.Context, waitConfirm bool) (org *core.Identity, err error)
+	RegisterIdentity(ctx context.Context, dto *core.IdentityCreateDTO, waitConfirm bool) (identity *core.Identity, err error)
+	UpdateIdentity(ctx context.Context, id string, dto *core.IdentityUpdateDTO, waitConfirm bool) (identity *core.Identity, err error)
 
-	GetOrganizationByNameOrID(ctx context.Context, nameOrID string) (*fftypes.Identity, error)
-	GetOrganizations(ctx context.Context, filter database.AndFilter) ([]*fftypes.Identity, *database.FilterResult, error)
-	GetOrganizationsWithVerifiers(ctx context.Context, filter database.AndFilter) ([]*fftypes.IdentityWithVerifiers, *database.FilterResult, error)
-	GetNodeByNameOrID(ctx context.Context, nameOrID string) (*fftypes.Identity, error)
-	GetNodes(ctx context.Context, filter database.AndFilter) ([]*fftypes.Identity, *database.FilterResult, error)
-	GetIdentityByID(ctx context.Context, ns string, id string) (*fftypes.Identity, error)
-	GetIdentityByIDWithVerifiers(ctx context.Context, ns, id string) (*fftypes.IdentityWithVerifiers, error)
-	GetIdentityByDID(ctx context.Context, did string) (*fftypes.Identity, error)
-	GetIdentityByDIDWithVerifiers(ctx context.Context, did string) (*fftypes.IdentityWithVerifiers, error)
-	GetIdentities(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.Identity, *database.FilterResult, error)
-	GetIdentitiesGlobal(ctx context.Context, filter database.AndFilter) ([]*fftypes.Identity, *database.FilterResult, error)
-	GetIdentitiesWithVerifiers(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.IdentityWithVerifiers, *database.FilterResult, error)
-	GetIdentitiesWithVerifiersGlobal(ctx context.Context, filter database.AndFilter) ([]*fftypes.IdentityWithVerifiers, *database.FilterResult, error)
-	GetIdentityVerifiers(ctx context.Context, ns, id string, filter database.AndFilter) ([]*fftypes.Verifier, *database.FilterResult, error)
-	GetVerifiers(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.Verifier, *database.FilterResult, error)
-	GetVerifierByHash(ctx context.Context, ns, hash string) (*fftypes.Verifier, error)
-	GetDIDDocForIndentityByID(ctx context.Context, ns, id string) (*DIDDocument, error)
+	GetOrganizationByNameOrID(ctx context.Context, nameOrID string) (*core.Identity, error)
+	GetOrganizations(ctx context.Context, filter database.AndFilter) ([]*core.Identity, *database.FilterResult, error)
+	GetOrganizationsWithVerifiers(ctx context.Context, filter database.AndFilter) ([]*core.IdentityWithVerifiers, *database.FilterResult, error)
+	GetNodeByNameOrID(ctx context.Context, nameOrID string) (*core.Identity, error)
+	GetNodes(ctx context.Context, filter database.AndFilter) ([]*core.Identity, *database.FilterResult, error)
+	GetIdentityByID(ctx context.Context, id string) (*core.Identity, error)
+	GetIdentityByIDWithVerifiers(ctx context.Context, id string) (*core.IdentityWithVerifiers, error)
+	GetIdentityByDID(ctx context.Context, did string) (*core.Identity, error)
+	GetIdentityByDIDWithVerifiers(ctx context.Context, did string) (*core.IdentityWithVerifiers, error)
+	GetIdentities(ctx context.Context, filter database.AndFilter) ([]*core.Identity, *database.FilterResult, error)
+	GetIdentitiesWithVerifiers(ctx context.Context, filter database.AndFilter) ([]*core.IdentityWithVerifiers, *database.FilterResult, error)
+	GetIdentityVerifiers(ctx context.Context, id string, filter database.AndFilter) ([]*core.Verifier, *database.FilterResult, error)
+	GetVerifiers(ctx context.Context, filter database.AndFilter) ([]*core.Verifier, *database.FilterResult, error)
+	GetVerifierByHash(ctx context.Context, hash string) (*core.Verifier, error)
+	GetDIDDocForIndentityByID(ctx context.Context, id string) (*DIDDocument, error)
 	GetDIDDocForIndentityByDID(ctx context.Context, did string) (*DIDDocument, error)
 }
 
 type networkMap struct {
-	ctx       context.Context
-	database  database.Plugin
-	broadcast broadcast.Manager
-	exchange  dataexchange.Plugin
-	identity  identity.Manager
-	syncasync syncasync.Bridge
+	ctx        context.Context
+	namespace  string
+	database   database.Plugin
+	defsender  definitions.Sender
+	exchange   dataexchange.Plugin // optional
+	identity   identity.Manager
+	syncasync  syncasync.Bridge
+	multiparty multiparty.Manager // optional
 }
 
-func NewNetworkMap(ctx context.Context, di database.Plugin, bm broadcast.Manager, dx dataexchange.Plugin, im identity.Manager, sa syncasync.Bridge) (Manager, error) {
-	if di == nil || bm == nil || dx == nil || im == nil {
-		return nil, i18n.NewError(ctx, coremsgs.MsgInitializationNilDepError)
+func NewNetworkMap(ctx context.Context, ns string, di database.Plugin, dx dataexchange.Plugin, ds definitions.Sender, im identity.Manager, sa syncasync.Bridge, mm multiparty.Manager) (Manager, error) {
+	if di == nil || ds == nil || im == nil {
+		return nil, i18n.NewError(ctx, coremsgs.MsgInitializationNilDepError, "NetworkMap")
 	}
 
 	nm := &networkMap{
-		ctx:       ctx,
-		database:  di,
-		broadcast: bm,
-		exchange:  dx,
-		identity:  im,
-		syncasync: sa,
+		ctx:        ctx,
+		namespace:  ns,
+		database:   di,
+		defsender:  ds,
+		exchange:   dx,
+		identity:   im,
+		syncasync:  sa,
+		multiparty: mm,
 	}
 	return nm, nil
 }

@@ -19,26 +19,26 @@ package apiserver
 import (
 	"net/http"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var getVerifierByID = &oapispec.Route{
+var getVerifierByID = &ffapi.Route{
 	Name:   "getVerifierByID",
-	Path:   "namespaces/{ns}/verifiers/{hash}",
+	Path:   "verifiers/{hash}",
 	Method: http.MethodGet,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
+	PathParams: []*ffapi.PathParam{
 		{Name: "hash", Example: "hash", Description: coremsgs.APIParamsVerifierHash},
 	},
 	QueryParams:     nil,
 	Description:     coremsgs.APIEndpointsGetVerifierByHash,
 	JSONInputValue:  nil,
-	JSONOutputValue: func() interface{} { return &fftypes.Verifier{} },
+	JSONOutputValue: func() interface{} { return &core.Verifier{} },
 	JSONOutputCodes: []int{http.StatusOK},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		return getOr(r.Ctx).NetworkMap().GetVerifierByHash(r.Ctx, r.PP["ns"], r.PP["hash"])
+	Extensions: &coreExtensions{
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			return cr.or.NetworkMap().GetVerifierByHash(cr.ctx, r.PP["hash"])
+		},
 	},
 }

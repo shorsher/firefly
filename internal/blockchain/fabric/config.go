@@ -17,8 +17,8 @@
 package fabric
 
 import (
-	"github.com/hyperledger/firefly/pkg/config"
-	"github.com/hyperledger/firefly/pkg/wsclient"
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/wsclient"
 )
 
 const (
@@ -34,8 +34,6 @@ const (
 
 	// FabconnectConfigDefaultChannel is the default Fabric channel to use if no "ledger" is specified in requests
 	FabconnectConfigDefaultChannel = "channel"
-	// FabconnectConfigChaincode is the Fabric Firefly chaincode deployed to the Firefly channels
-	FabconnectConfigChaincode = "chaincode"
 	// FabconnectConfigSigner is the signer identity used to subscribe to FireFly chaincode events
 	FabconnectConfigSigner = "signer"
 	// FabconnectConfigTopic is the websocket listen topic that the node should register on, which is important if there are multiple
@@ -49,17 +47,19 @@ const (
 	FabconnectPrefixShort = "prefixShort"
 	// FabconnectPrefixLong is used in HTTP headers in requests to ethconnect
 	FabconnectPrefixLong = "prefixLong"
+	// FabconnectConfigChaincodeDeprecated is the Fabric Firefly chaincode deployed to the Firefly channels
+	FabconnectConfigChaincodeDeprecated = "chaincode"
 )
 
-func (f *Fabric) InitPrefix(prefix config.Prefix) {
-	fabconnectConf := prefix.SubPrefix(FabconnectConfigKey)
-	wsclient.InitPrefix(fabconnectConf)
-	fabconnectConf.AddKnownKey(FabconnectConfigDefaultChannel)
-	fabconnectConf.AddKnownKey(FabconnectConfigChaincode)
-	fabconnectConf.AddKnownKey(FabconnectConfigSigner)
-	fabconnectConf.AddKnownKey(FabconnectConfigTopic)
-	fabconnectConf.AddKnownKey(FabconnectConfigBatchSize, defaultBatchSize)
-	fabconnectConf.AddKnownKey(FabconnectConfigBatchTimeout, defaultBatchTimeout)
-	fabconnectConf.AddKnownKey(FabconnectPrefixShort, defaultPrefixShort)
-	fabconnectConf.AddKnownKey(FabconnectPrefixLong, defaultPrefixLong)
+func (f *Fabric) InitConfig(config config.Section) {
+	f.fabconnectConf = config.SubSection(FabconnectConfigKey)
+	wsclient.InitConfig(f.fabconnectConf)
+	f.fabconnectConf.AddKnownKey(FabconnectConfigDefaultChannel)
+	f.fabconnectConf.AddKnownKey(FabconnectConfigChaincodeDeprecated)
+	f.fabconnectConf.AddKnownKey(FabconnectConfigSigner)
+	f.fabconnectConf.AddKnownKey(FabconnectConfigTopic)
+	f.fabconnectConf.AddKnownKey(FabconnectConfigBatchSize, defaultBatchSize)
+	f.fabconnectConf.AddKnownKey(FabconnectConfigBatchTimeout, defaultBatchTimeout)
+	f.fabconnectConf.AddKnownKey(FabconnectPrefixShort, defaultPrefixShort)
+	f.fabconnectConf.AddKnownKey(FabconnectPrefixLong, defaultPrefixLong)
 }

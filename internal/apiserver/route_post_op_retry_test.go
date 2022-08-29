@@ -22,17 +22,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/mocks/operationmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestPostOpRetry(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mom := &operationmocks.Manager{}
 	o.On("Operations").Return(mom)
-	input := fftypes.EmptyInput{}
+	input := core.EmptyInput{}
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(&input)
 	opID := fftypes.NewUUID()
@@ -40,16 +42,17 @@ func TestPostOpRetry(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mom.On("RetryOperation", mock.Anything, "ns1", opID).
-		Return(&fftypes.Operation{}, nil)
+	mom.On("RetryOperation", mock.Anything, opID).
+		Return(&core.Operation{}, nil)
 	r.ServeHTTP(res, req)
 
 	assert.Equal(t, 202, res.Result().StatusCode)
 }
 
 func TestPostOpRetryBadID(t *testing.T) {
-	_, r := newTestAPIServer()
-	input := fftypes.EmptyInput{}
+	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
+	input := core.EmptyInput{}
 	var buf bytes.Buffer
 	json.NewEncoder(&buf).Encode(&input)
 	req := httptest.NewRequest("POST", "/api/v1/namespaces/ns1/operations/bad/retry", &buf)

@@ -20,14 +20,15 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/mocks/contractmocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
 func TestDeleteContractListenerByID(t *testing.T) {
 	o, r := newTestAPIServer()
+	o.On("Authorize", mock.Anything, mock.Anything).Return(nil)
 	mcm := &contractmocks.Manager{}
 	o.On("Contracts").Return(mcm)
 	id := fftypes.NewUUID()
@@ -35,7 +36,7 @@ func TestDeleteContractListenerByID(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
 	res := httptest.NewRecorder()
 
-	mcm.On("DeleteContractListenerByNameOrID", mock.Anything, "mynamespace", id.String()).
+	mcm.On("DeleteContractListenerByNameOrID", mock.Anything, id.String()).
 		Return(nil, nil)
 	r.ServeHTTP(res, req)
 

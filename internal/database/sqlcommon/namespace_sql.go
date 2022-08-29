@@ -21,31 +21,25 @@ import (
 	"database/sql"
 
 	sq "github.com/Masterminds/squirrel"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
+	"github.com/hyperledger/firefly-common/pkg/log"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
-	"github.com/hyperledger/firefly/pkg/log"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
 var (
 	namespaceColumns = []string{
-		"id",
-		"message_id",
-		"ntype",
 		"name",
+		"remote_name",
 		"description",
 		"created",
-	}
-	namespaceFilterFieldMap = map[string]string{
-		"message": "message_id",
-		"type":    "ntype",
+		"firefly_contracts",
 	}
 )
 
 const namespacesTable = "namespaces"
 
-func (s *SQLCommon) UpsertNamespace(ctx context.Context, namespace *fftypes.Namespace, allowExisting bool) (err error) {
+func (s *SQLCommon) UpsertNamespace(ctx context.Context, namespace *core.Namespace, allowExisting bool) (err error) {
 	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
 	if err != nil {
 		return err
@@ -56,26 +50,14 @@ func (s *SQLCommon) UpsertNamespace(ctx context.Context, namespace *fftypes.Name
 	if allowExisting {
 		// Do a select within the transaction to determine if the UUID already exists
 		namespaceRows, _, err := s.queryTx(ctx, namespacesTable, tx,
-			sq.Select("id").
+			sq.Select("seq").
 				From(namespacesTable).
-				Where(sq.Eq{"name": namespace.Name}),
+				Where(sq.Eq{"name": namespace.LocalName}),
 		)
 		if err != nil {
 			return err
 		}
 		existing = namespaceRows.Next()
-
-		if existing {
-			var id fftypes.UUID
-			_ = namespaceRows.Scan(&id)
-			if namespace.ID != nil {
-				if *namespace.ID != id {
-					namespaceRows.Close()
-					return database.IDMismatch
-				}
-			}
-			namespace.ID = &id // Update on returned object
-		}
 		namespaceRows.Close()
 	}
 
@@ -83,38 +65,27 @@ func (s *SQLCommon) UpsertNamespace(ctx context.Context, namespace *fftypes.Name
 		// Update the namespace
 		if _, err = s.updateTx(ctx, namespacesTable, tx,
 			sq.Update(namespacesTable).
-				// Note we do not update ID
-				Set("message_id", namespace.Message).
-				Set("ntype", string(namespace.Type)).
-				Set("name", namespace.Name).
+				Set("remote_name", namespace.RemoteName).
 				Set("description", namespace.Description).
 				Set("created", namespace.Created).
-				Where(sq.Eq{"name": namespace.Name}),
-			func() {
-				s.callbacks.UUIDCollectionEvent(database.CollectionNamespaces, fftypes.ChangeEventTypeUpdated, namespace.ID)
-			},
+				Set("firefly_contracts", namespace.Contracts).
+				Where(sq.Eq{"name": namespace.LocalName}),
+			nil,
 		); err != nil {
 			return err
 		}
 	} else {
-		if namespace.ID == nil {
-			namespace.ID = fftypes.NewUUID()
-		}
-
 		if _, err = s.insertTx(ctx, namespacesTable, tx,
 			sq.Insert(namespacesTable).
 				Columns(namespaceColumns...).
 				Values(
-					namespace.ID,
-					namespace.Message,
-					string(namespace.Type),
-					namespace.Name,
+					namespace.LocalName,
+					namespace.RemoteName,
 					namespace.Description,
 					namespace.Created,
+					namespace.Contracts,
 				),
-			func() {
-				s.callbacks.UUIDCollectionEvent(database.CollectionNamespaces, fftypes.ChangeEventTypeCreated, namespace.ID)
-			},
+			nil,
 		); err != nil {
 			return err
 		}
@@ -123,15 +94,14 @@ func (s *SQLCommon) UpsertNamespace(ctx context.Context, namespace *fftypes.Name
 	return s.commitTx(ctx, tx, autoCommit)
 }
 
-func (s *SQLCommon) namespaceResult(ctx context.Context, row *sql.Rows) (*fftypes.Namespace, error) {
-	namespace := fftypes.Namespace{}
+func (s *SQLCommon) namespaceResult(ctx context.Context, row *sql.Rows) (*core.Namespace, error) {
+	namespace := core.Namespace{}
 	err := row.Scan(
-		&namespace.ID,
-		&namespace.Message,
-		&namespace.Type,
-		&namespace.Name,
+		&namespace.LocalName,
+		&namespace.RemoteName,
 		&namespace.Description,
 		&namespace.Created,
+		&namespace.Contracts,
 	)
 	if err != nil {
 		return nil, i18n.WrapError(ctx, err, coremsgs.MsgDBReadErr, namespacesTable)
@@ -139,7 +109,7 @@ func (s *SQLCommon) namespaceResult(ctx context.Context, row *sql.Rows) (*fftype
 	return &namespace, nil
 }
 
-func (s *SQLCommon) getNamespaceEq(ctx context.Context, eq sq.Eq, textName string) (message *fftypes.Namespace, err error) {
+func (s *SQLCommon) getNamespaceEq(ctx context.Context, eq sq.Eq, textName string) (message *core.Namespace, err error) {
 	rows, _, err := s.query(ctx, namespacesTable,
 		sq.Select(namespaceColumns...).
 			From(namespacesTable).
@@ -163,57 +133,6 @@ func (s *SQLCommon) getNamespaceEq(ctx context.Context, eq sq.Eq, textName strin
 	return namespace, nil
 }
 
-func (s *SQLCommon) GetNamespace(ctx context.Context, name string) (message *fftypes.Namespace, err error) {
+func (s *SQLCommon) GetNamespace(ctx context.Context, name string) (message *core.Namespace, err error) {
 	return s.getNamespaceEq(ctx, sq.Eq{"name": name}, name)
-}
-
-func (s *SQLCommon) GetNamespaceByID(ctx context.Context, id *fftypes.UUID) (ns *fftypes.Namespace, err error) {
-	return s.getNamespaceEq(ctx, sq.Eq{"id": id}, id.String())
-}
-
-func (s *SQLCommon) GetNamespaces(ctx context.Context, filter database.Filter) (message []*fftypes.Namespace, fr *database.FilterResult, err error) {
-
-	query, fop, fi, err := s.filterSelect(ctx, "", sq.Select(namespaceColumns...).From(namespacesTable), filter, namespaceFilterFieldMap, []interface{}{"sequence"})
-	if err != nil {
-		return nil, nil, err
-	}
-
-	rows, tx, err := s.query(ctx, namespacesTable, query)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-
-	namespace := []*fftypes.Namespace{}
-	for rows.Next() {
-		d, err := s.namespaceResult(ctx, rows)
-		if err != nil {
-			return nil, nil, err
-		}
-		namespace = append(namespace, d)
-	}
-
-	return namespace, s.queryRes(ctx, namespacesTable, tx, fop, fi), err
-
-}
-
-func (s *SQLCommon) DeleteNamespace(ctx context.Context, id *fftypes.UUID) (err error) {
-
-	ctx, tx, autoCommit, err := s.beginOrUseTx(ctx)
-	if err != nil {
-		return err
-	}
-	defer s.rollbackTx(ctx, tx, autoCommit)
-
-	err = s.deleteTx(ctx, namespacesTable, tx, sq.Delete(namespacesTable).Where(sq.Eq{
-		"id": id,
-	}),
-		func() {
-			s.callbacks.UUIDCollectionEvent(database.CollectionNamespaces, fftypes.ChangeEventTypeDeleted, id)
-		})
-	if err != nil {
-		return err
-	}
-
-	return s.commitTx(ctx, tx, autoCommit)
 }

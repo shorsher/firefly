@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/mocks/databasemocks"
 	"github.com/hyperledger/firefly/mocks/dataexchangemocks"
 	"github.com/hyperledger/firefly/mocks/datamocks"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/mocks/identitymanagermocks"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -32,21 +34,32 @@ func TestPrepareAndRunTransferBlob(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBlob,
-		ID:   fftypes.NewUUID(),
+	op := &core.Operation{
+		Type:      core.OpTypeDataExchangeSendBlob,
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
-		IdentityProfile: fftypes.IdentityProfile{
+		IdentityProfile: core.IdentityProfile{
 			Profile: fftypes.JSONObject{
 				"id": "peer1",
 			},
 		},
 	}
-	blob := &fftypes.Blob{
+	localNode := &core.Identity{
+		IdentityBase: core.IdentityBase{
+			ID: fftypes.NewUUID(),
+		},
+		IdentityProfile: core.IdentityProfile{
+			Profile: fftypes.JSONObject{
+				"id": "local1",
+			},
+		},
+	}
+	blob := &core.Blob{
 		Hash:       fftypes.NewRandB32(),
 		PayloadRef: "payload",
 	}
@@ -54,9 +67,11 @@ func TestPrepareAndRunTransferBlob(t *testing.T) {
 
 	mdi := pm.database.(*databasemocks.Plugin)
 	mdx := pm.exchange.(*dataexchangemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), mock.Anything).Return(node, nil)
 	mdi.On("GetBlobMatchingHash", context.Background(), blob.Hash).Return(blob, nil)
-	mdx.On("TransferBlob", context.Background(), op.ID, "peer1", "payload").Return(nil)
+	mim.On("GetLocalNode", context.Background()).Return(localNode, nil)
+	mdx.On("TransferBlob", context.Background(), "ns1:"+op.ID.String(), node.Profile, localNode.Profile, "payload").Return(nil)
 
 	po, err := pm.PrepareOperation(context.Background(), op)
 	assert.NoError(t, err)
@@ -70,35 +85,47 @@ func TestPrepareAndRunTransferBlob(t *testing.T) {
 
 	mdi.AssertExpectations(t)
 	mdx.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareAndRunBatchSend(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
-		ID:   fftypes.NewUUID(),
+	op := &core.Operation{
+		Type:      core.OpTypeDataExchangeSendBatch,
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
-		IdentityProfile: fftypes.IdentityProfile{
+		IdentityProfile: core.IdentityProfile{
 			Profile: fftypes.JSONObject{
 				"id": "peer1",
 			},
 		},
 	}
-	group := &fftypes.Group{
+	localNode := &core.Identity{
+		IdentityBase: core.IdentityBase{
+			ID: fftypes.NewUUID(),
+		},
+		IdentityProfile: core.IdentityProfile{
+			Profile: fftypes.JSONObject{
+				"id": "local1",
+			},
+		},
+	}
+	group := &core.Group{
 		Hash: fftypes.NewRandB32(),
 	}
-	bp := &fftypes.BatchPersisted{
-		BatchHeader: fftypes.BatchHeader{
+	bp := &core.BatchPersisted{
+		BatchHeader: core.BatchHeader{
 			ID: fftypes.NewUUID(),
 		},
 	}
-	batch := &fftypes.Batch{
+	batch := &core.Batch{
 		BatchHeader: bp.BatchHeader,
 	}
 	addBatchSendInputs(op, node.ID, group.Hash, batch.ID)
@@ -107,10 +134,12 @@ func TestPrepareAndRunBatchSend(t *testing.T) {
 	mdx := pm.exchange.(*dataexchangemocks.Plugin)
 	mdm := pm.data.(*datamocks.Manager)
 	mdm.On("HydrateBatch", context.Background(), bp).Return(batch, nil)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
-	mdi.On("GetGroupByHash", context.Background(), group.Hash).Return(group, nil)
-	mdi.On("GetBatchByID", context.Background(), batch.ID).Return(bp, nil)
-	mdx.On("SendMessage", context.Background(), op.ID, "peer1", mock.Anything).Return(nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("GetLocalNode", context.Background()).Return(localNode, nil)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
+	mdi.On("GetGroupByHash", context.Background(), "ns1", group.Hash).Return(group, nil)
+	mdi.On("GetBatchByID", context.Background(), "ns1", batch.ID).Return(bp, nil)
+	mdx.On("SendMessage", context.Background(), "ns1:"+op.ID.String(), node.Profile, localNode.Profile, mock.Anything).Return(nil)
 
 	po, err := pm.PrepareOperation(context.Background(), op)
 	assert.NoError(t, err)
@@ -126,35 +155,37 @@ func TestPrepareAndRunBatchSend(t *testing.T) {
 	mdi.AssertExpectations(t)
 	mdx.AssertExpectations(t)
 	mdm.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareAndRunBatchSendHydrateFail(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
-		ID:   fftypes.NewUUID(),
+	op := &core.Operation{
+		Type:      core.OpTypeDataExchangeSendBatch,
+		ID:        fftypes.NewUUID(),
+		Namespace: "ns1",
 	}
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
-		IdentityProfile: fftypes.IdentityProfile{
+		IdentityProfile: core.IdentityProfile{
 			Profile: fftypes.JSONObject{
 				"id": "peer1",
 			},
 		},
 	}
-	group := &fftypes.Group{
+	group := &core.Group{
 		Hash: fftypes.NewRandB32(),
 	}
-	bp := &fftypes.BatchPersisted{
-		BatchHeader: fftypes.BatchHeader{
+	bp := &core.BatchPersisted{
+		BatchHeader: core.BatchHeader{
 			ID: fftypes.NewUUID(),
 		},
 	}
-	batch := &fftypes.Batch{
+	batch := &core.Batch{
 		BatchHeader: bp.BatchHeader,
 	}
 	addBatchSendInputs(op, node.ID, group.Hash, batch.ID)
@@ -162,22 +193,24 @@ func TestPrepareAndRunBatchSendHydrateFail(t *testing.T) {
 	mdi := pm.database.(*databasemocks.Plugin)
 	mdm := pm.data.(*datamocks.Manager)
 	mdm.On("HydrateBatch", context.Background(), bp).Return(nil, fmt.Errorf("pop"))
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
-	mdi.On("GetGroupByHash", context.Background(), group.Hash).Return(group, nil)
-	mdi.On("GetBatchByID", context.Background(), batch.ID).Return(bp, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
+	mdi.On("GetGroupByHash", context.Background(), "ns1", group.Hash).Return(group, nil)
+	mdi.On("GetBatchByID", context.Background(), "ns1", batch.ID).Return(bp, nil)
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "pop", err)
 
 	mdi.AssertExpectations(t)
 	mdm.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationNotSupported(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	po, err := pm.PrepareOperation(context.Background(), &fftypes.Operation{})
+	po, err := pm.PrepareOperation(context.Background(), &core.Operation{})
 
 	assert.Nil(t, po)
 	assert.Regexp(t, "FF10371", err)
@@ -187,8 +220,8 @@ func TestPrepareOperationBlobSendBadInput(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeDataExchangeSendBlob,
+	op := &core.Operation{
+		Type:  core.OpTypeDataExchangeSendBlob,
 		Input: fftypes.JSONObject{"node": "bad"},
 	}
 
@@ -202,21 +235,21 @@ func TestPrepareOperationBlobSendNodeFail(t *testing.T) {
 
 	nodeID := fftypes.NewUUID()
 	blobHash := fftypes.NewRandB32()
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBlob,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBlob,
 		Input: fftypes.JSONObject{
 			"node": nodeID.String(),
 			"hash": blobHash.String(),
 		},
 	}
 
-	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), nodeID).Return(nil, fmt.Errorf("pop"))
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), nodeID).Return(nil, fmt.Errorf("pop"))
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
 
-	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBlobSendNodeNotFound(t *testing.T) {
@@ -225,21 +258,21 @@ func TestPrepareOperationBlobSendNodeNotFound(t *testing.T) {
 
 	nodeID := fftypes.NewUUID()
 	blobHash := fftypes.NewRandB32()
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBlob,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBlob,
 		Input: fftypes.JSONObject{
 			"node": nodeID.String(),
 			"hash": blobHash.String(),
 		},
 	}
 
-	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), nodeID).Return(nil, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), nodeID).Return(nil, nil)
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
 
-	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBlobSendBlobFail(t *testing.T) {
@@ -247,18 +280,18 @@ func TestPrepareOperationBlobSendBlobFail(t *testing.T) {
 	defer cancel()
 
 	blobHash := fftypes.NewRandB32()
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
-		IdentityProfile: fftypes.IdentityProfile{
+		IdentityProfile: core.IdentityProfile{
 			Profile: fftypes.JSONObject{
 				"id": "peer1",
 			},
 		},
 	}
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBlob,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBlob,
 		Input: fftypes.JSONObject{
 			"node": node.ID.String(),
 			"hash": blobHash.String(),
@@ -266,13 +299,15 @@ func TestPrepareOperationBlobSendBlobFail(t *testing.T) {
 	}
 
 	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
 	mdi.On("GetBlobMatchingHash", context.Background(), blobHash).Return(nil, fmt.Errorf("pop"))
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
 
 	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBlobSendBlobNotFound(t *testing.T) {
@@ -280,18 +315,18 @@ func TestPrepareOperationBlobSendBlobNotFound(t *testing.T) {
 	defer cancel()
 
 	blobHash := fftypes.NewRandB32()
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
-		IdentityProfile: fftypes.IdentityProfile{
+		IdentityProfile: core.IdentityProfile{
 			Profile: fftypes.JSONObject{
 				"id": "peer1",
 			},
 		},
 	}
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBlob,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBlob,
 		Input: fftypes.JSONObject{
 			"node": node.ID.String(),
 			"hash": blobHash.String(),
@@ -299,21 +334,23 @@ func TestPrepareOperationBlobSendBlobNotFound(t *testing.T) {
 	}
 
 	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
 	mdi.On("GetBlobMatchingHash", context.Background(), blobHash).Return(nil, nil)
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
 
 	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBatchSendBadInput(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	op := &fftypes.Operation{
-		Type:  fftypes.OpTypeDataExchangeSendBatch,
+	op := &core.Operation{
+		Type:  core.OpTypeDataExchangeSendBatch,
 		Input: fftypes.JSONObject{"node": "bad"},
 	}
 
@@ -328,8 +365,8 @@ func TestPrepareOperationBatchSendNodeFail(t *testing.T) {
 	nodeID := fftypes.NewUUID()
 	groupHash := fftypes.NewRandB32()
 	batchID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBatch,
 		Input: fftypes.JSONObject{
 			"node":  nodeID.String(),
 			"group": groupHash.String(),
@@ -337,13 +374,13 @@ func TestPrepareOperationBatchSendNodeFail(t *testing.T) {
 		},
 	}
 
-	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), nodeID).Return(nil, fmt.Errorf("pop"))
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), nodeID).Return(nil, fmt.Errorf("pop"))
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
 
-	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBatchSendNodeNotFound(t *testing.T) {
@@ -353,8 +390,8 @@ func TestPrepareOperationBatchSendNodeNotFound(t *testing.T) {
 	nodeID := fftypes.NewUUID()
 	groupHash := fftypes.NewRandB32()
 	batchID := fftypes.NewUUID()
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBatch,
 		Input: fftypes.JSONObject{
 			"node":  nodeID.String(),
 			"group": groupHash.String(),
@@ -362,13 +399,13 @@ func TestPrepareOperationBatchSendNodeNotFound(t *testing.T) {
 		},
 	}
 
-	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), nodeID).Return(nil, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), nodeID).Return(nil, nil)
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
 
-	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBatchSendGroupFail(t *testing.T) {
@@ -377,13 +414,13 @@ func TestPrepareOperationBatchSendGroupFail(t *testing.T) {
 
 	groupHash := fftypes.NewRandB32()
 	batchID := fftypes.NewUUID()
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
 	}
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBatch,
 		Input: fftypes.JSONObject{
 			"node":  node.ID.String(),
 			"group": groupHash.String(),
@@ -392,13 +429,15 @@ func TestPrepareOperationBatchSendGroupFail(t *testing.T) {
 	}
 
 	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
-	mdi.On("GetGroupByHash", context.Background(), groupHash).Return(nil, fmt.Errorf("pop"))
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
+	mdi.On("GetGroupByHash", context.Background(), "ns1", groupHash).Return(nil, fmt.Errorf("pop"))
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
 
 	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBatchSendGroupNotFound(t *testing.T) {
@@ -407,13 +446,13 @@ func TestPrepareOperationBatchSendGroupNotFound(t *testing.T) {
 
 	groupHash := fftypes.NewRandB32()
 	batchID := fftypes.NewUUID()
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
 	}
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBatch,
 		Input: fftypes.JSONObject{
 			"node":  node.ID.String(),
 			"group": groupHash.String(),
@@ -422,13 +461,15 @@ func TestPrepareOperationBatchSendGroupNotFound(t *testing.T) {
 	}
 
 	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
-	mdi.On("GetGroupByHash", context.Background(), groupHash).Return(nil, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
+	mdi.On("GetGroupByHash", context.Background(), "ns1", groupHash).Return(nil, nil)
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
 
 	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBatchSendBatchFail(t *testing.T) {
@@ -436,16 +477,16 @@ func TestPrepareOperationBatchSendBatchFail(t *testing.T) {
 	defer cancel()
 
 	batchID := fftypes.NewUUID()
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
 	}
-	group := &fftypes.Group{
+	group := &core.Group{
 		Hash: fftypes.NewRandB32(),
 	}
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBatch,
 		Input: fftypes.JSONObject{
 			"node":  node.ID.String(),
 			"group": group.Hash.String(),
@@ -454,14 +495,16 @@ func TestPrepareOperationBatchSendBatchFail(t *testing.T) {
 	}
 
 	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
-	mdi.On("GetGroupByHash", context.Background(), group.Hash).Return(group, nil)
-	mdi.On("GetBatchByID", context.Background(), batchID).Return(nil, fmt.Errorf("pop"))
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
+	mdi.On("GetGroupByHash", context.Background(), "ns1", group.Hash).Return(group, nil)
+	mdi.On("GetBatchByID", context.Background(), "ns1", batchID).Return(nil, fmt.Errorf("pop"))
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.EqualError(t, err, "pop")
 
 	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestPrepareOperationBatchSendBatchNotFound(t *testing.T) {
@@ -469,16 +512,16 @@ func TestPrepareOperationBatchSendBatchNotFound(t *testing.T) {
 	defer cancel()
 
 	batchID := fftypes.NewUUID()
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
 	}
-	group := &fftypes.Group{
+	group := &core.Group{
 		Hash: fftypes.NewRandB32(),
 	}
-	op := &fftypes.Operation{
-		Type: fftypes.OpTypeDataExchangeSendBatch,
+	op := &core.Operation{
+		Type: core.OpTypeDataExchangeSendBatch,
 		Input: fftypes.JSONObject{
 			"node":  node.ID.String(),
 			"group": group.Hash.String(),
@@ -487,21 +530,23 @@ func TestPrepareOperationBatchSendBatchNotFound(t *testing.T) {
 	}
 
 	mdi := pm.database.(*databasemocks.Plugin)
-	mdi.On("GetIdentityByID", context.Background(), node.ID).Return(node, nil)
-	mdi.On("GetGroupByHash", context.Background(), group.Hash).Return(group, nil)
-	mdi.On("GetBatchByID", context.Background(), batchID).Return(nil, nil)
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("CachedIdentityLookupByID", context.Background(), node.ID).Return(node, nil)
+	mdi.On("GetGroupByHash", context.Background(), "ns1", group.Hash).Return(group, nil)
+	mdi.On("GetBatchByID", context.Background(), "ns1", batchID).Return(nil, nil)
 
 	_, err := pm.PrepareOperation(context.Background(), op)
 	assert.Regexp(t, "FF10109", err)
 
 	mdi.AssertExpectations(t)
+	mim.AssertExpectations(t)
 }
 
 func TestRunOperationNotSupported(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	_, complete, err := pm.RunOperation(context.Background(), &fftypes.PreparedOperation{})
+	_, complete, err := pm.RunOperation(context.Background(), &core.PreparedOperation{})
 
 	assert.False(t, complete)
 	assert.Regexp(t, "FF10378", err)
@@ -511,17 +556,29 @@ func TestRunOperationBatchSendInvalidData(t *testing.T) {
 	pm, cancel := newTestPrivateMessaging(t)
 	defer cancel()
 
-	op := &fftypes.Operation{}
-	node := &fftypes.Identity{
-		IdentityBase: fftypes.IdentityBase{
+	op := &core.Operation{}
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
 			ID: fftypes.NewUUID(),
 		},
 	}
-	transport := &fftypes.TransportWrapper{
-		Group: &fftypes.Group{},
-		Batch: &fftypes.Batch{
-			Payload: fftypes.BatchPayload{
-				Data: fftypes.DataArray{
+	localNode := &core.Identity{
+		IdentityBase: core.IdentityBase{
+			ID: fftypes.NewUUID(),
+		},
+		IdentityProfile: core.IdentityProfile{
+			Profile: fftypes.JSONObject{
+				"id": "local1",
+			},
+		},
+	}
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("GetLocalNode", context.Background()).Return(localNode, nil)
+	transport := &core.TransportWrapper{
+		Group: &core.Group{},
+		Batch: &core.Batch{
+			Payload: core.BatchPayload{
+				Data: core.DataArray{
 					{Value: fftypes.JSONAnyPtr(`!json`)},
 				},
 			},
@@ -532,6 +589,54 @@ func TestRunOperationBatchSendInvalidData(t *testing.T) {
 
 	assert.False(t, complete)
 	assert.Regexp(t, "FF10137", err)
+}
+
+func TestRunOperationBatchSendNodeFail(t *testing.T) {
+	pm, cancel := newTestPrivateMessaging(t)
+	defer cancel()
+
+	op := &core.Operation{}
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
+			ID: fftypes.NewUUID(),
+		},
+	}
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("GetLocalNode", context.Background()).Return(nil, fmt.Errorf("pop"))
+	transport := &core.TransportWrapper{
+		Group: &core.Group{},
+		Batch: &core.Batch{
+			Payload: core.BatchPayload{
+				Data: core.DataArray{
+					{Value: fftypes.JSONAnyPtr(`!json`)},
+				},
+			},
+		},
+	}
+
+	_, complete, err := pm.RunOperation(context.Background(), opSendBatch(op, node, transport))
+
+	assert.False(t, complete)
+	assert.EqualError(t, err, "pop")
+}
+
+func TestRunOperationBlobSendNodeFail(t *testing.T) {
+	pm, cancel := newTestPrivateMessaging(t)
+	defer cancel()
+
+	op := &core.Operation{}
+	node := &core.Identity{
+		IdentityBase: core.IdentityBase{
+			ID: fftypes.NewUUID(),
+		},
+	}
+	mim := pm.identity.(*identitymanagermocks.Manager)
+	mim.On("GetLocalNode", context.Background()).Return(nil, fmt.Errorf("pop"))
+
+	_, complete, err := pm.RunOperation(context.Background(), opSendBlob(op, node, &core.Blob{}))
+
+	assert.False(t, complete)
+	assert.EqualError(t, err, "pop")
 }
 
 func TestOperationUpdate(t *testing.T) {

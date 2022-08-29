@@ -22,13 +22,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hyperledger/firefly-common/pkg/config"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/log"
+	"github.com/hyperledger/firefly-common/pkg/retry"
 	"github.com/hyperledger/firefly/internal/coreconfig"
 	"github.com/hyperledger/firefly/internal/data"
-	"github.com/hyperledger/firefly/internal/retry"
-	"github.com/hyperledger/firefly/pkg/config"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/log"
 )
 
 type rewindType int
@@ -268,9 +269,9 @@ func (rw *rewinder) getRewindsForMessages(ctx context.Context, msgRewinds []*fft
 func (rw *rewinder) getRewindsForBlobs(ctx context.Context, newHashes []driver.Value, batchIDs map[fftypes.UUID]bool) error {
 
 	// Find any data associated with this blob
-	var data []*fftypes.DataRef
+	var data []*core.DataRef
 	filter := database.DataQueryFactory.NewFilterLimit(ctx, rw.querySafetyLimit).In("blob.hash", newHashes)
-	data, _, err := rw.database.GetDataRefs(ctx, filter)
+	data, _, err := rw.database.GetDataRefs(ctx, rw.aggregator.namespace, filter)
 	if err != nil {
 		return err
 	}
@@ -301,10 +302,10 @@ func (rw *rewinder) getRewindsForDIDs(ctx context.Context, dids []driver.Value, 
 	// We need to find all pending messages, that are authored by this DID
 	fb := database.MessageQueryFactory.NewFilterLimit(ctx, rw.querySafetyLimit)
 	filter := fb.And(
-		fb.Eq("state", fftypes.MessageStatePending),
+		fb.Eq("state", core.MessageStatePending),
 		fb.In("author", dids),
 	)
-	records, err := rw.database.GetMessageIDs(ctx, filter)
+	records, err := rw.database.GetMessageIDs(ctx, rw.aggregator.namespace, filter)
 	if err != nil {
 		return err
 	}

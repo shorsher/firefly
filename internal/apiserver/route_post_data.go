@@ -22,58 +22,61 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/hyperledger/firefly/internal/coreconfig"
+	"github.com/hyperledger/firefly-common/pkg/ffapi"
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/oapispec"
-	"github.com/hyperledger/firefly/pkg/fftypes"
+	"github.com/hyperledger/firefly/internal/orchestrator"
+	"github.com/hyperledger/firefly/pkg/core"
 )
 
-var postData = &oapispec.Route{
-	Name:   "postData",
-	Path:   "namespaces/{ns}/data",
-	Method: http.MethodPost,
-	PathParams: []*oapispec.PathParam{
-		{Name: "ns", ExampleFromConf: coreconfig.NamespacesDefault, Description: coremsgs.APIParamsNamespace},
-	},
+var postData = &ffapi.Route{
+	Name:        "postData",
+	Path:        "data",
+	Method:      http.MethodPost,
+	PathParams:  nil,
 	QueryParams: nil,
-	FormParams: []*oapispec.FormParam{
+	FormParams: []*ffapi.FormParam{
 		{Name: "autometa", Description: coremsgs.APIParamsAutometa},
 		{Name: "metadata", Description: coremsgs.APIParamsMetadata},
 		{Name: "validator", Description: coremsgs.APIParamsValidator},
 		{Name: "datatype.name", Description: coremsgs.APIParamsDatatypeName},
 		{Name: "datatype.version", Description: coremsgs.APIParamsDatatypeVersion},
 	},
-	FilterFactory:   nil,
 	Description:     coremsgs.APIEndpointsPostData,
-	JSONInputValue:  func() interface{} { return &fftypes.DataRefOrValue{} },
-	JSONOutputValue: func() interface{} { return &fftypes.Data{} },
+	JSONInputValue:  func() interface{} { return &core.DataRefOrValue{} },
+	JSONOutputValue: func() interface{} { return &core.Data{} },
 	JSONOutputCodes: []int{http.StatusCreated},
-	JSONHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		output, err = getOr(r.Ctx).Data().UploadJSON(r.Ctx, r.PP["ns"], r.Input.(*fftypes.DataRefOrValue))
-		return output, err
-	},
-	FormUploadHandler: func(r *oapispec.APIRequest) (output interface{}, err error) {
-		data := &fftypes.DataRefOrValue{}
-		validator := r.FP["validator"]
-		if len(validator) > 0 {
-			data.Validator = fftypes.ValidatorType(validator)
-		}
-		if r.FP["datatype.name"] != "" {
-			data.Datatype = &fftypes.DatatypeRef{
-				Name:    r.FP["datatype.name"],
-				Version: r.FP["datatype.version"],
+	Extensions: &coreExtensions{
+		EnabledIf: func(or orchestrator.Orchestrator) bool {
+			return or.MultiParty() != nil
+		},
+		CoreJSONHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			output, err = cr.or.Data().UploadJSON(cr.ctx, r.Input.(*core.DataRefOrValue))
+			return output, err
+		},
+		CoreFormUploadHandler: func(r *ffapi.APIRequest, cr *coreRequest) (output interface{}, err error) {
+			data := &core.DataRefOrValue{}
+			validator := r.FP["validator"]
+			if len(validator) > 0 {
+				data.Validator = core.ValidatorType(validator)
 			}
-		}
-		metadata := r.FP["metadata"]
-		if len(metadata) > 0 {
-			// The metadata might be JSON, or just a simple string. Try to unmarshal and see
-			var marshalCheck interface{}
-			if err := json.Unmarshal([]byte(metadata), &marshalCheck); err != nil {
-				metadata = fmt.Sprintf(`"%s"`, metadata)
+			if r.FP["datatype.name"] != "" {
+				data.Datatype = &core.DatatypeRef{
+					Name:    r.FP["datatype.name"],
+					Version: r.FP["datatype.version"],
+				}
 			}
-			data.Value = fftypes.JSONAnyPtr(metadata)
-		}
-		output, err = getOr(r.Ctx).Data().UploadBlob(r.Ctx, r.PP["ns"], data, r.Part, strings.EqualFold(r.FP["autometa"], "true"))
-		return output, err
+			metadata := r.FP["metadata"]
+			if len(metadata) > 0 {
+				// The metadata might be JSON, or just a simple string. Try to unmarshal and see
+				var marshalCheck interface{}
+				if err := json.Unmarshal([]byte(metadata), &marshalCheck); err != nil {
+					metadata = fmt.Sprintf(`"%s"`, metadata)
+				}
+				data.Value = fftypes.JSONAnyPtr(metadata)
+			}
+			output, err = cr.or.Data().UploadBlob(cr.ctx, data, r.Part, strings.EqualFold(r.FP["autometa"], "true"))
+			return output, err
+		},
 	},
 }

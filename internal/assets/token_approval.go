@@ -19,22 +19,22 @@ package assets
 import (
 	"context"
 
+	"github.com/hyperledger/firefly-common/pkg/fftypes"
+	"github.com/hyperledger/firefly-common/pkg/i18n"
 	"github.com/hyperledger/firefly/internal/coremsgs"
-	"github.com/hyperledger/firefly/internal/sysmessaging"
+	"github.com/hyperledger/firefly/internal/syncasync"
 	"github.com/hyperledger/firefly/internal/txcommon"
+	"github.com/hyperledger/firefly/pkg/core"
 	"github.com/hyperledger/firefly/pkg/database"
-	"github.com/hyperledger/firefly/pkg/fftypes"
-	"github.com/hyperledger/firefly/pkg/i18n"
 )
 
-func (am *assetManager) GetTokenApprovals(ctx context.Context, ns string, filter database.AndFilter) ([]*fftypes.TokenApproval, *database.FilterResult, error) {
-	return am.database.GetTokenApprovals(ctx, am.scopeNS(ns, filter))
+func (am *assetManager) GetTokenApprovals(ctx context.Context, filter database.AndFilter) ([]*core.TokenApproval, *database.FilterResult, error) {
+	return am.database.GetTokenApprovals(ctx, am.namespace, filter)
 }
 
 type approveSender struct {
-	mgr       *assetManager
-	namespace string
-	approval  *fftypes.TokenApprovalInput
+	mgr      *assetManager
+	approval *core.TokenApprovalInput
 }
 
 func (s *approveSender) Prepare(ctx context.Context) error {
@@ -53,18 +53,17 @@ func (s *approveSender) setDefaults() {
 	s.approval.LocalID = fftypes.NewUUID()
 }
 
-func (am *assetManager) NewApproval(ns string, approval *fftypes.TokenApprovalInput) sysmessaging.MessageSender {
+func (am *assetManager) NewApproval(approval *core.TokenApprovalInput) syncasync.Sender {
 	sender := &approveSender{
-		mgr:       am,
-		namespace: ns,
-		approval:  approval,
+		mgr:      am,
+		approval: approval,
 	}
 	sender.setDefaults()
 	return sender
 }
 
-func (am *assetManager) TokenApproval(ctx context.Context, ns string, approval *fftypes.TokenApprovalInput, waitConfirm bool) (out *fftypes.TokenApproval, err error) {
-	sender := am.NewApproval(ns, approval)
+func (am *assetManager) TokenApproval(ctx context.Context, approval *core.TokenApprovalInput, waitConfirm bool) (out *core.TokenApproval, err error) {
+	sender := am.NewApproval(approval)
 	if waitConfirm {
 		err = sender.SendAndWait(ctx)
 	} else {
@@ -75,17 +74,17 @@ func (am *assetManager) TokenApproval(ctx context.Context, ns string, approval *
 
 func (s *approveSender) sendInternal(ctx context.Context, method sendMethod) (err error) {
 	if method == methodSendAndWait {
-		out, err := s.mgr.syncasync.WaitForTokenApproval(ctx, s.namespace, s.approval.LocalID, s.Send)
+		out, err := s.mgr.syncasync.WaitForTokenApproval(ctx, s.approval.LocalID, s.Send)
 		if out != nil {
 			s.approval.TokenApproval = *out
 		}
 		return err
 	}
 
-	var op *fftypes.Operation
-	var pool *fftypes.TokenPool
+	var op *core.Operation
+	var pool *core.TokenPool
 	err = s.mgr.database.RunAsGroup(ctx, func(ctx context.Context) (err error) {
-		pool, err = s.mgr.validateApproval(ctx, s.namespace, s.approval)
+		pool, err = s.mgr.validateApproval(ctx, s.approval)
 		if err != nil {
 			return err
 		}
@@ -99,18 +98,18 @@ func (s *approveSender) sendInternal(ctx context.Context, method sendMethod) (er
 			return nil
 		}
 
-		txid, err := s.mgr.txHelper.SubmitNewTransaction(ctx, s.namespace, fftypes.TransactionTypeTokenApproval)
+		txid, err := s.mgr.txHelper.SubmitNewTransaction(ctx, core.TransactionTypeTokenApproval)
 		if err != nil {
 			return err
 		}
 		s.approval.TX.ID = txid
-		s.approval.TX.Type = fftypes.TransactionTypeTokenApproval
+		s.approval.TX.Type = core.TransactionTypeTokenApproval
 
-		op = fftypes.NewOperation(
+		op = core.NewOperation(
 			plugin,
-			s.namespace,
+			s.mgr.namespace,
 			txid,
-			fftypes.TransactionTypeTokenApproval)
+			core.TransactionTypeTokenApproval)
 		if err = txcommon.AddTokenApprovalInputs(op, &s.approval.TokenApproval); err == nil {
 			err = s.mgr.database.InsertOperation(ctx, op)
 		}
@@ -126,14 +125,14 @@ func (s *approveSender) sendInternal(ctx context.Context, method sendMethod) (er
 	return err
 }
 
-func (am *assetManager) validateApproval(ctx context.Context, ns string, approval *fftypes.TokenApprovalInput) (pool *fftypes.TokenPool, err error) {
+func (am *assetManager) validateApproval(ctx context.Context, approval *core.TokenApprovalInput) (pool *core.TokenPool, err error) {
 	if approval.Pool == "" {
-		pool, err = am.getDefaultTokenPool(ctx, ns)
+		pool, err = am.getDefaultTokenPool(ctx)
 		if err != nil {
 			return nil, err
 		}
 	} else {
-		pool, err = am.GetTokenPoolByNameOrID(ctx, ns, approval.Pool)
+		pool, err = am.GetTokenPoolByNameOrID(ctx, approval.Pool)
 		if err != nil {
 			return nil, err
 		}
@@ -141,7 +140,7 @@ func (am *assetManager) validateApproval(ctx context.Context, ns string, approva
 	approval.TokenApproval.Pool = pool.ID
 	approval.TokenApproval.Connector = pool.Connector
 
-	if pool.State != fftypes.TokenPoolStateConfirmed {
+	if pool.State != core.TokenPoolStateConfirmed {
 		return nil, i18n.NewError(ctx, coremsgs.MsgTokenPoolNotConfirmed)
 	}
 	approval.Key, err = am.identity.NormalizeSigningKey(ctx, approval.Key, am.keyNormalization)
